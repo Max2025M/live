@@ -43,37 +43,25 @@ async function obterDuracao(video) {
   return parseFloat(stdout.trim());
 }
 
-async function dividirVideo(video, parte1, parte2) {
-  const duracao = await obterDuracao(video);
-  const metade = duracao / 2;
-
-  await executarFFmpeg(['-i', video, '-t', metade.toFixed(2), parte1], parte1);
-  await executarFFmpeg(['-i', video, '-ss', metade.toFixed(2), parte2], parte2);
-}
-
 async function baixarArquivo(remoto, destino) {
   return new Promise((resolve, reject) => {
     const rclone = spawn('rclone', ['copy', `meudrive:${remoto}`, '.', '--config', keyFile]);
-
     rclone.stderr.on('data', data => process.stderr.write(data));
-
     rclone.on('close', async code => {
       if (code === 0) {
         const nome = path.basename(remoto);
         if (!fs.existsSync(nome)) return reject(new Error(`Arquivo não encontrado: ${nome}`));
-
         fs.renameSync(nome, destino);
         registrarTemporario(destino);
 
         const extensao = path.extname(destino).toLowerCase();
-
         if (['.mp4', '.webm', '.mov'].includes(extensao)) {
           const temporario = destino.replace(/(\.[^.]+)$/, '_temp$1');
           await reencode(destino, temporario);
           fs.renameSync(temporario, destino);
           console.log(`📥 Vídeo baixado e reencodado: ${destino}`);
         } else {
-          console.log(`📥 Arquivo de imagem baixado: ${destino}`);
+          console.log(`📥 Imagem baixada: ${destino}`);
         }
 
         resolve();
@@ -84,23 +72,23 @@ async function baixarArquivo(remoto, destino) {
   });
 }
 
-// Função para aplicar o rodapé e logo apenas nas partes do vídeo principal (Parte 1 e Parte 2)
 async function aplicarRodapeELogoPartePrincipal(videoEntrada, rodape, logo, saidaFinal) {
   const durRodape = await obterDuracao(rodape);
-  const tempoInicioRodape = 240; // O rodapé começa no minuto 4 (240 segundos)
+  const tempoInicio = 240;
+  const tempoFim = tempoInicio + durRodape;
 
   const filtro = `
-    [0:v]scale=1280:720,setsar=1[v0];
-    [1:v]scale=1280:100[rod];
-    [2:v]scale=100:100[logo];
-    [v0][rod]overlay=0:H-h:enable='between(t,${tempoInicioRodape},${tempoInicioRodape + durRodape})'[v1];
-    [v1][logo]overlay=W-w-10:10[outv]
+    [0:v]scale=1280:720,setsar=1[vfull];
+    [0:v]scale=960:540,setpts=PTS-STARTPTS[vmini];
+    [1:v]scale=1280:180,setpts=PTS-STARTPTS[vrod];
+
+    [vfull][vrod]overlay=0:540:enable='between(t,${tempoInicio},${tempoFim})'[vtemp];
+    [vtemp][vmini]overlay=(W-w)/2:0:enable='between(t,${tempoInicio},${tempoFim})'[outv]
   `.replace(/\s+/g, '');
 
   await executarFFmpeg([
     '-i', videoEntrada,
     '-i', rodape,
-    '-i', logo,
     '-filter_complex', filtro,
     '-map', '[outv]',
     '-map', '0:a?',
@@ -111,10 +99,35 @@ async function aplicarRodapeELogoPartePrincipal(videoEntrada, rodape, logo, said
   ], saidaFinal);
 }
 
-// Função para normalizar os vídeos para garantir compatibilidade binária
-async function normalizarVideo(videoEntrada, videoSaida) {
+async function aplicarRodapeComoFundo(parte2, rodape, saida) {
+  const filtro = `
+    [0:v]scale=320:-1[mini];
+    [1:v]scale=1280:720[bg];
+    [bg][mini]overlay=W-w-51:H-h-65[outv]
+  `.replace(/\s+/g, '');
+
   await executarFFmpeg([
-    '-i', videoEntrada,
+    '-i', parte2,
+    '-i', rodape,
+    '-filter_complex', filtro,
+    '-map', '[outv]',
+    '-map', '0:a?',
+    '-c:v', 'libx264',
+    '-preset', 'ultrafast',
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    '-shortest',
+    saida
+  ], saida);
+}
+
+async function normalizarVideo(entrada, saida) {
+  if (!fs.existsSync(entrada)) {
+    throw new Error(`❌ Arquivo não encontrado: ${entrada}`);
+  }
+
+  await executarFFmpeg([
+    '-i', entrada,
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '23',
@@ -122,100 +135,92 @@ async function normalizarVideo(videoEntrada, videoSaida) {
     '-b:a', '128k',
     '-vf', 'scale=1280:720',
     '-f', 'mp4',
-    videoSaida
-  ], videoSaida);
+    saida
+  ], saida);
 }
 
-// Função para normalizar todos os vídeos antes de processá-los
-async function normalizarTodosVideos(videos) {
-  for (let i = 0; i < videos.length; i++) {
-    const videoEntrada = videos[i];
-    const videoSaida = videoEntrada.replace('.mp4', '_normalizado.mp4');
-    
-    // Normaliza o vídeo para garantir compatibilidade binária
-    await normalizarVideo(videoEntrada, videoSaida);
-    console.log(`✅ Vídeo normalizado: ${videoSaida}`);
+async function unirComRodape(listaVideos, saidaFinal) {
+  const comandos = [];
+
+  for (let i = 0; i < listaVideos.length; i++) {
+    comandos.push('-i', listaVideos[i]);
   }
+
+  const filtros = listaVideos.map((_, i) => `[${i}:v:0][${i}:a:0]`).join('');
+  const filtroFinal = `
+    ${filtros}concat=n=${listaVideos.length}:v=1:a=1[v][a]
+  `.replace(/\s+/g, '');
+
+  await executarFFmpeg([
+    ...comandos,
+    '-filter_complex', filtroFinal,
+    '-preset', 'veryfast',
+    '-c:v', 'libx264',
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart',
+    '-map', '[v]', '-map', '[a]',
+    saidaFinal
+  ], saidaFinal);
 }
 
-// Função para unir os vídeos em um arquivo final
-async function unirComRodape(listaDeVideos, saidaFinal) {
-  const listaTxt = 'lista_completa.txt';
-
-  // Cria um arquivo com a lista de vídeos normalizados para unir
-  fs.writeFileSync(listaTxt, listaDeVideos.map(v => `file '${v}'`).join('\n'));
-
-  // Une os vídeos normalizados
-  await executarFFmpeg(['-f', 'concat', '-safe', '0', '-i', listaTxt, '-c', 'copy', saidaFinal], saidaFinal);
-}
-
-// Função principal para processar vídeos
 async function processarVideos() {
-  // Garantir que a parte 1 e parte 2 sejam criadas corretamente
   const parte1 = 'parte1.mp4';
   const parte2 = 'parte2.mp4';
 
-  // Verifique se os arquivos de entrada existem antes de prosseguir
   if (!fs.existsSync(parte1) || !fs.existsSync(parte2)) {
-    console.log(`Arquivo não encontrado: parte1.mp4 ou parte2.mp4`);
-    return;
+    throw new Error(`❌ parte1.mp4 ou parte2.mp4 ausente.`);
   }
 
-  const videosParaProcessar = [
-    parte1, 
-    parte2, 
-    'inicial.mp4', 
-    'miraplay.mp4', 
-    ...input.videos_extras, 
-    'final.mp4'
-  ];
+  await normalizarVideo(parte1, 'parte1_normalizado.mp4');
+  await normalizarVideo(parte2, 'parte2_normalizado.mp4');
 
-  console.log('🎥 Normalizando todos os vídeos...');
-  await normalizarTodosVideos(videosParaProcessar);
+  await aplicarRodapeELogoPartePrincipal('parte1_normalizado.mp4', 'rodape.mp4', 'logo.png', 'parte1_completo.mp4');
+  await aplicarRodapeComoFundo('parte2_normalizado.mp4', 'rodape.mp4', 'parte2_completo.mp4');
 
-  console.log('🎥 Aplicando rodapé e logo às partes principais...');
-  // Aplica o rodapé e logo somente nas partes do vídeo principal (parte1 e parte2)
-  await aplicarRodapeELogoPartePrincipal(parte1, 'rodape.mp4', 'logo.png', 'parte1_completo.mp4');
-  await aplicarRodapeELogoPartePrincipal(parte2, 'rodape.mp4', 'logo.png', 'parte2_completo.mp4');
-
-  // Para os outros vídeos (não principais), apenas normalizamos
-  for (let video of ['inicial.mp4', 'miraplay.mp4', ...input.videos_extras, 'final.mp4']) {
-    await normalizarVideo(video, video.replace('.mp4', '_normalizado.mp4'));
+  const extras = input.videos_extras || [];
+  for (let i = 0; i < extras.length; i++) {
+    const nome = path.basename(extras[i]);
+    await baixarArquivo(extras[i], nome);
+    await normalizarVideo(nome, `extra_${i}_normalizado.mp4`);
   }
+
+  await normalizarVideo('inicial.mp4', 'inicial_normalizado.mp4');
+  await normalizarVideo('miraplay.mp4', 'miraplay_normalizado.mp4');
+  await normalizarVideo('final.mp4', 'final_normalizado.mp4');
 
   const ordemFinal = [
     'parte1_completo.mp4',
     'inicial_normalizado.mp4',
     'miraplay_normalizado.mp4',
-    ...input.videos_extras.map((_, i) => `extra_${i}_normalizado.mp4`),
+    ...extras.map((_, i) => `extra_${i}_normalizado.mp4`),
     'inicial_normalizado.mp4',
     'parte2_completo.mp4',
     'final_normalizado.mp4'
   ];
 
-  console.log('🎬 Unindo vídeos...');
   await unirComRodape(ordemFinal, 'video_final_completo.mp4');
-
-  console.log('✅ Vídeo final gerado!');
 }
 
-// Executar o processamento
 (async () => {
   const { video_principal, rodape_id, logo_id, stream_url } = input;
 
-  console.log('⏬ Baixando vídeos...');
   await baixarArquivo(video_principal, 'principal.mp4');
+  await baixarArquivo(input.video_inicial, 'inicial.mp4');
+  await baixarArquivo(input.video_miraplay, 'miraplay.mp4');
+  await baixarArquivo(input.video_final, 'final.mp4');
   await baixarArquivo(rodape_id, 'rodape.mp4');
   await baixarArquivo(logo_id, 'logo.png');
 
-  console.log('🎬 Iniciando processamento...');
-  await processarVideos();
+  await executarFFmpeg(['-i', 'principal.mp4', '-t', '00:08:00', '-c', 'copy', 'parte1.mp4'], 'parte1.mp4');
+  await executarFFmpeg(['-i', 'principal.mp4', '-ss', '00:08:00', '-c', 'copy', 'parte2.mp4'], 'parte2.mp4');
 
-  console.log('📝 Salvando informações de transmissão...');
-  fs.writeFileSync('stream_info.json', JSON.stringify({ id: input.id, stream_url }, null, 2));
+  await processarVideos();
 
   const stats = fs.statSync('video_final_completo.mp4');
   const duracaoFinal = await obterDuracao('video_final_completo.mp4');
-  console.log(`✅ Vídeo final gerado com ${Math.round(stats.size / 1024 / 1024)} MB`);
-  console.log(`⏱️ Duração total: ${duracaoFinal.toFixed(2)} segundos`);
+  fs.writeFileSync('stream_info.json', JSON.stringify({ id: input.id, stream_url }, null, 2));
+
+  console.log(`✅ Finalizado com ${Math.round(stats.size / 1024 / 1024)} MB e duração ${duracaoFinal.toFixed(2)}s`);
 })();
