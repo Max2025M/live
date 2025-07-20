@@ -110,11 +110,12 @@ async function inserirRodape(principal, rodape, saida) {
   ], saida);
 }
 
+// ✅ FUNÇÃO CORRIGIDA: redimensiona logo para 120x120 e posiciona com margem no canto superior direito
 async function adicionarLogo(input, output, logo) {
   await executarFFmpeg([
     '-i', input,
     '-i', logo,
-    '-filter_complex', 'overlay=W-w-10:10',
+    '-filter_complex', '[1:v]scale=120:120[logo];[0:v][logo]overlay=W-w-10:10',
     '-c:v', 'libx264',
     '-c:a', 'aac',
     output
@@ -187,7 +188,6 @@ async function montarSequencia() {
   const duracaoFormatada = formatarDuracao(duracaoFinal);
   const tamanhoMB = Math.round(stats.size / 1024 / 1024);
 
-  // Salvar stream_info.json corretamente
   const streamInfo = {
     id: input.id || 'sem_id',
     stream: input.stream_url || null
