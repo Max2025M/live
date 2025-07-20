@@ -83,8 +83,7 @@ async function baixarArquivo(remoto, destino) {
 }
 
 async function cortarMeio(videoPath, parte1, parte2) {
-  const { stdout } = await exec(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${videoPath}"`);
-  const duracao = parseFloat(stdout.trim());
+  const duracao = await obterDuracao(videoPath);
   const metade = duracao / 2;
 
   await executarFFmpeg(['-i', videoPath, '-t', metade.toFixed(2), '-c', 'copy', parte1], parte1);
@@ -92,8 +91,7 @@ async function cortarMeio(videoPath, parte1, parte2) {
 }
 
 async function inserirRodape(principal, rodape, saida) {
-  const { stdout } = await exec(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${rodape}"`);
-  const duracaoRodape = parseFloat(stdout.trim());
+  const duracaoRodape = await obterDuracao(rodape);
 
   await executarFFmpeg([
     '-i', principal,
@@ -127,6 +125,7 @@ async function montarSequencia() {
   const arquivos = {};
 
   async function baixarERegistrar(key, nomeFinal) {
+    if (!input[key]) return;
     await baixarArquivo(input[key], nomeFinal);
     arquivos[key] = nomeFinal;
   }
@@ -136,13 +135,15 @@ async function montarSequencia() {
   await baixarERegistrar('video_miraplay', 'video_miraplay.mp4');
   await baixarERegistrar('video_final', 'video_final.mp4');
   await baixarERegistrar('logo_id', 'logo.png');
-  if (input.rodape_id) await baixarERegistrar('rodape_id', 'rodape.mp4');
+  await baixarERegistrar('rodape_id', 'rodape.mp4');
 
   const extras = [];
-  for (let i = 0; i < input.videos_extras.length; i++) {
-    const nome = `extra_${i}.mp4`;
-    await baixarArquivo(input.videos_extras[i], nome);
-    extras.push(nome);
+  if (Array.isArray(input.videos_extras)) {
+    for (let i = 0; i < input.videos_extras.length; i++) {
+      const nome = `extra_${i}.mp4`;
+      await baixarArquivo(input.videos_extras[i], nome);
+      extras.push(nome);
+    }
   }
 
   await cortarMeio(arquivos.video_principal, 'parte1.mp4', 'parte2.mp4');
@@ -181,19 +182,22 @@ async function montarSequencia() {
     'video_final_completo.mp4'
   ], 'video_final_completo.mp4');
 
-  // Obter informações finais
   const stats = fs.statSync('video_final_completo.mp4');
   const duracaoFinal = await obterDuracao('video_final_completo.mp4');
   const duracaoFormatada = formatarDuracao(duracaoFinal);
   const tamanhoMB = Math.round(stats.size / 1024 / 1024);
 
-  // Gerar stream_info.json
-  fs.writeFileSync('stream_info.json', JSON.stringify({
-    id: input.id,
-    stream: input.stream_url
-  }, null, 2));
+  // Salvar stream_info.json corretamente
+  const streamInfo = {
+    id: input.id || 'sem_id',
+    stream: input.stream_url || null
+  };
+
+  fs.writeFileSync('stream_info.json', JSON.stringify(streamInfo, null, 2));
 
   console.log(`✅ Finalizado com ${tamanhoMB} MB e duração ${duracaoFormatada}`);
+  console.log('📦 stream_info.json salvo com conteúdo:');
+  console.log(JSON.stringify(streamInfo, null, 2));
 }
 
 montarSequencia()
