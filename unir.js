@@ -110,7 +110,6 @@ async function inserirRodape(principal, rodape, saida) {
   ], saida);
 }
 
-// ✅ FUNÇÃO CORRIGIDA: redimensiona logo para 120x120 e posiciona com margem no canto superior direito
 async function adicionarLogo(input, output, logo) {
   await executarFFmpeg([
     '-i', input,
@@ -120,6 +119,12 @@ async function adicionarLogo(input, output, logo) {
     '-c:a', 'aac',
     output
   ], output);
+}
+
+function normalizarStreamUrl(url) {
+  if (!url) return null;
+  // Remove barras duplicadas após /rtmp
+  return url.replace(/(rtmps:\/\/[^/]+\/rtmp)\/+/, '$1/');
 }
 
 async function montarSequencia() {
@@ -190,7 +195,7 @@ async function montarSequencia() {
 
   const streamInfo = {
     id: input.id || 'sem_id',
-    stream: input.stream_url || null
+    stream: normalizarStreamUrl(input.stream_url)
   };
 
   fs.writeFileSync('stream_info.json', JSON.stringify(streamInfo, null, 2));
