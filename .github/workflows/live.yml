@@ -13,19 +13,19 @@ on:
         type: string
       rodape_id:
         description: 'Caminho do rodapé (.mp4 ou .webm)'
-        required: false
+        required: true
         type: string
       rodape_texto:
         description: 'Texto do rodapé'
-        required: false
+        required: true
         type: string
       videos_extras:
         description: 'Caminhos dos vídeos extras, separados por vírgula'
-        required: false
+        required: true
         type: string
       stream_url:
         description: 'URL do RTMP (Facebook ou outro)'
-        required: false
+        required: true
         type: string
       rclone_conf:
         description: 'Conteúdo base64 do rclone.conf'
@@ -60,12 +60,8 @@ jobs:
 
       - name: 📃 Processar vídeos extras
         run: |
-          if [ -z "${{ inputs.videos_extras }}" ]; then
-            echo "[]" > extras.json
-          else
-            IFS=',' read -ra EXTRAS <<< "${{ inputs.videos_extras }}"
-            printf '%s\n' "${EXTRAS[@]}" | jq -R . | jq -s . > extras.json
-          fi
+          IFS=',' read -ra EXTRAS <<< "${{ inputs.videos_extras }}"
+          printf '%s\n' "${EXTRAS[@]}" | jq -R . | jq -s . > extras.json
 
       - name: 📝 Criar input.json com todos os dados
         run: |
@@ -108,7 +104,6 @@ jobs:
           path: |
             video_final_completo.mp4
             stream_info.json
-            rodape.mp4
 
   transmitir-video:
     runs-on: ubuntu-latest
