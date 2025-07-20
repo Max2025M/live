@@ -46,9 +46,9 @@ async function reencode(inputFile, outputFile) {
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '23',
+    '-pix_fmt', 'yuv420p',
     '-c:a', 'aac',
     '-b:a', '128k',
-    '-f', 'mp4',
     outputFile
   ], outputFile);
 }
@@ -64,15 +64,10 @@ async function baixarArquivo(remoto, destino) {
         fs.renameSync(nome, destino);
         registrarTemporario(destino);
 
-        const ext = path.extname(destino).toLowerCase();
-        if (['.mp4', '.webm', '.mov'].includes(ext)) {
-          const temp = destino.replace(/(\.[^.]+)$/, '_temp$1');
-          await reencode(destino, temp);
-          fs.renameSync(temp, destino);
-          console.log(`📥 Vídeo baixado e reencodado: ${destino}`);
-        } else {
-          console.log(`📥 Imagem baixada: ${destino}`);
-        }
+        const temp = destino.replace(/(\.[^.]+)$/, '_temp$1');
+        await reencode(destino, temp);
+        fs.renameSync(temp, destino);
+        console.log(`📥 Vídeo baixado e reencodado: ${destino}`);
 
         resolve();
       } else {
@@ -90,40 +85,36 @@ async function cortarMeio(videoPath, parte1, parte2) {
   await executarFFmpeg(['-i', videoPath, '-ss', metade.toFixed(2), '-c', 'copy', parte2], parte2);
 }
 
-async function inserirRodape(principal, rodape, saida) {
+// Logo + Rodapé ao mesmo tempo, mantendo logo visível
+async function inserirRodape(principal, rodape, logo, saida) {
   const duracaoRodape = await obterDuracao(rodape);
+  const inicioRodape = 240;
 
   await executarFFmpeg([
     '-i', principal,
     '-i', rodape,
+    '-i', logo,
     '-filter_complex',
-    `[0:v]trim=0:240,setpts=PTS-STARTPTS[antes];` +
-    `[0:v]trim=240:${240 + duracaoRodape},setpts=PTS-STARTPTS,scale=426:240[mini];` +
-    `[1:v]scale=1280:720[rod];` +
-    `[rod][mini]overlay=W-w-50:90[durante];` +
-    `[0:v]trim=${240 + duracaoRodape},setpts=PTS-STARTPTS[depois];` +
-    `[antes][durante][depois]concat=n=3:v=1:a=0[outv]`,
-    '-map', '[outv]', '-map', '0:a?',
+    '[2:v]scale=120:120[logo];' +
+    `[0:v]trim=0:${inicioRodape},setpts=PTS-STARTPTS[antes];` +
+    `[0:v]trim=${inicioRodape}:${inicioRodape + duracaoRodape},setpts=PTS-STARTPTS[meio];` +
+    `[0:v]trim=${inicioRodape + duracaoRodape},setpts=PTS-STARTPTS[depois];` +
+    `[1:v]scale=426:240[mini];` +
+    '[antes][logo]overlay=W-w-10:10[antes_logo];' +
+    '[meio][logo]overlay=W-w-10:10[tmp1];' +
+    '[tmp1][mini]overlay=W-w-50:90[meio_logo];' +
+    '[depois][logo]overlay=W-w-10:10[depois_logo];' +
+    '[antes_logo][meio_logo][depois_logo]concat=n=3:v=1:a=0[outv]',
+    '-map', '[outv]',
+    '-map', '0:a?',
     '-c:v', 'libx264',
     '-c:a', 'aac',
     saida
   ], saida);
 }
 
-async function adicionarLogo(input, output, logo) {
-  await executarFFmpeg([
-    '-i', input,
-    '-i', logo,
-    '-filter_complex', '[1:v]scale=120:120[logo];[0:v][logo]overlay=W-w-10:10',
-    '-c:v', 'libx264',
-    '-c:a', 'aac',
-    output
-  ], output);
-}
-
 function normalizarStreamUrl(url) {
   if (!url) return null;
-  // Remove barras duplicadas após /rtmp
   return url.replace(/(rtmps:\/\/[^/]+\/rtmp)\/+/, '$1/');
 }
 
@@ -154,15 +145,12 @@ async function montarSequencia() {
 
   await cortarMeio(arquivos.video_principal, 'parte1.mp4', 'parte2.mp4');
 
-  await adicionarLogo('parte1.mp4', 'parte1_logo.mp4', arquivos.logo_id);
-  await adicionarLogo('parte2.mp4', 'parte2_logo.mp4', arquivos.logo_id);
+  let parte1_final = 'parte1.mp4';
+  let parte2_final = 'parte2.mp4';
 
-  let parte1_final = 'parte1_logo.mp4';
-  let parte2_final = 'parte2_logo.mp4';
-
-  if (arquivos.rodape_id) {
-    await inserirRodape('parte1_logo.mp4', arquivos.rodape_id, 'parte1_final.mp4');
-    await inserirRodape('parte2_logo.mp4', arquivos.rodape_id, 'parte2_final.mp4');
+  if (arquivos.rodape_id && arquivos.logo_id) {
+    await inserirRodape(parte1_final, arquivos.rodape_id, arquivos.logo_id, 'parte1_final.mp4');
+    await inserirRodape(parte2_final, arquivos.rodape_id, arquivos.logo_id, 'parte2_final.mp4');
     parte1_final = 'parte1_final.mp4';
     parte2_final = 'parte2_final.mp4';
   }
