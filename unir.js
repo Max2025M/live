@@ -107,6 +107,11 @@ async function cortarVideo(video, parte1, parte2) {
   await executarFFmpeg(['-i', video, '-ss', meio.toFixed(2), '-c', 'copy', parte2], parte2);
 }
 
+function corrigirURL(url) {
+  // Remove barras duplas seguidas exceto após protocolo (http:// ou rtmps://)
+  return url.replace(/([^:]\/)\/+/g, '$1');
+}
+
 async function montarVideoFinal() {
   const baixar = async (chave, nomeArquivo) => {
     if (input[chave]) {
@@ -115,7 +120,7 @@ async function montarVideoFinal() {
     }
   };
 
-  // Baixar todos os vídeos e o logo
+  // Baixar todos os vídeos e logo
   await baixar('video_principal', 'principal.mp4');
   await baixar('video_inicial', 'inicial.mp4');
   await baixar('video_miraplay', 'miraplay.mp4');
@@ -126,12 +131,14 @@ async function montarVideoFinal() {
   arquivos['rodape'] = 'rodape.mp4';
   arquivos['logo'] = 'logo.png';
 
-  // Extras
+  // Baixar extras
   arquivos.extras = [];
-  for (let i = 0; i < input.videos_extras.length; i++) {
-    const nome = `extra_${i}.mp4`;
-    await baixarArquivo(input.videos_extras[i], nome);
-    arquivos.extras.push(nome);
+  if (Array.isArray(input.videos_extras)) {
+    for (let i = 0; i < input.videos_extras.length; i++) {
+      const nome = `extra_${i}.mp4`;
+      await baixarArquivo(input.videos_extras[i], nome);
+      arquivos.extras.push(nome);
+    }
   }
 
   // Cortar vídeo principal
@@ -141,7 +148,7 @@ async function montarVideoFinal() {
   await inserirLogoERodape('parte1.mp4', arquivos.rodape, arquivos.logo, 'parte1_final.mp4');
   await inserirLogoERodape('parte2.mp4', arquivos.rodape, arquivos.logo, 'parte2_final.mp4');
 
-  // Lista de concatenação
+  // Montar lista concatenação
   const listaConcat = [
     'parte1_final.mp4',
     arquivos.video_inicial,
@@ -152,8 +159,16 @@ async function montarVideoFinal() {
     arquivos.video_final
   ];
 
+  // Garante que todos os arquivos existam antes de criar lista
+  for (const f of listaConcat) {
+    if (!fs.existsSync(f)) {
+      throw new Error(`Arquivo para concatenação não encontrado: ${f}`);
+    }
+  }
+
   const concatList = 'arquivos.txt';
   fs.writeFileSync(concatList, listaConcat.map(f => `file '${f}'`).join('\n'));
+  registrarTemporario(concatList);
 
   await executarFFmpeg([
     '-f', 'concat',
@@ -163,24 +178,28 @@ async function montarVideoFinal() {
     'video_final_completo.mp4'
   ], 'video_final_completo.mp4');
 
+  // Corrige a URL da stream removendo barras duplas extras
+  const stream_url = corrigirURL(input.stream_url);
+
   const duracao = await obterDuracao('video_final_completo.mp4');
   const tamanho = fs.statSync('video_final_completo.mp4').size / 1024 / 1024;
 
   console.log(`⏱️ Duração: ${Math.floor(duracao / 60)}:${Math.floor(duracao % 60).toString().padStart(2, '0')} minutos`);
   console.log(`📦 Tamanho: ${tamanho.toFixed(2)} MB`);
-  console.log(`🌐 URL da transmissão: ${input.stream_url}`);
+  console.log(`🌐 URL da transmissão corrigida: ${stream_url}`);
 
   fs.writeFileSync('stream_info.json', JSON.stringify({
     id: input.id,
-    stream: input.stream_url
+    stream: stream_url
   }, null, 2));
 
-  // 🔻 Remoção dos arquivos temporários
+  // Remover arquivos temporários baixados
   for (const file of arquivosTemporarios) {
     try {
       fs.unlinkSync(file);
+      console.log(`🧹 Removido: ${file}`);
     } catch (e) {
-      console.warn(`⚠️ Não foi possível remover ${file}:`, e.message);
+      console.warn(`⚠️ Não foi possível remover ${file}: ${e.message}`);
     }
   }
 
@@ -191,4 +210,3 @@ montarVideoFinal().catch(err => {
   console.error('❌ Erro:', err);
   process.exit(1);
 });
-
