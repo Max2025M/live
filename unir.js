@@ -39,14 +39,6 @@ function formatarDuracao(segundos) {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
-/**
- * Reencode vídeo para padrão fixo:
- * - Resolução 1280x720
- * - Codec vídeo libx264, preset veryfast, crf 23
- * - Codec áudio AAC 128k
- * - Taxa de frames 25 fps
- * - Formato mp4
- */
 async function reencodePadronizado(inputFile, outputFile) {
   await executarFFmpeg([
     '-i', inputFile,
@@ -57,7 +49,10 @@ async function reencodePadronizado(inputFile, outputFile) {
     '-crf', '23',
     '-c:a', 'aac',
     '-b:a', '128k',
-    '-movflags', '+faststart', // ajuda em compatibilidade de streaming
+    '-map', '0:v:0',
+    '-map', '0:a?',
+    '-shortest',
+    '-movflags', '+faststart',
     '-f', 'mp4',
     outputFile
   ], outputFile);
@@ -74,7 +69,6 @@ async function baixarArquivo(remoto, destino) {
         fs.renameSync(nome, destino);
         registrarTemporario(destino);
 
-        // Só reencode se for vídeo (supondo extensão mp4)
         if (destino.toLowerCase().endsWith('.mp4')) {
           const temp = destino.replace(/(\.[^.]+)$/, '_temp$1');
           await reencodePadronizado(destino, temp);
@@ -104,6 +98,9 @@ async function cortarMeio(videoPath, parte1, parte2) {
     '-preset', 'veryfast',
     '-crf', '23',
     '-c:a', 'aac',
+    '-map', '0:v:0',
+    '-map', '0:a?',
+    '-shortest',
     parte1
   ], parte1);
 
@@ -115,13 +112,17 @@ async function cortarMeio(videoPath, parte1, parte2) {
     '-preset', 'veryfast',
     '-crf', '23',
     '-c:a', 'aac',
+    '-map', '0:v:0',
+    '-map', '0:a?',
+    '-shortest',
     parte2
   ], parte2);
 }
 
 async function inserirRodape(principal, rodape, logo, saida) {
   const duracaoRodape = await obterDuracao(rodape);
-  const fimRodape = 240 + duracaoRodape;
+  const inicioRodape = 240; // minuto 4
+  const fimRodape = inicioRodape + duracaoRodape;
 
   await executarFFmpeg([
     '-i', principal,
@@ -129,22 +130,24 @@ async function inserirRodape(principal, rodape, logo, saida) {
     '-i', logo,
     '-filter_complex',
     `
-    [0:v]trim=0:240,setpts=PTS-STARTPTS[pre];
-    [0:v]trim=240:${fimRodape},setpts=PTS-STARTPTS[cut];
+    [0:v]trim=0:${inicioRodape},setpts=PTS-STARTPTS[pre];
+    [0:v]trim=${inicioRodape}:${fimRodape},setpts=PTS-STARTPTS[cut];
+    [0:v]trim=${fimRodape},setpts=PTS-STARTPTS[post];
     [1:v]scale=1280:720[rod];
     [cut]scale=426:240[mini];
     [rod][mini]overlay=W-w-50:90[tmp];
-    [tmp][2:v]overlay=W-w-10:10[rodfinal];
-    [0:v]trim=${fimRodape},setpts=PTS-STARTPTS[post];
-    [post][2:v]overlay=W-w-10:10[postlogo];
-    [pre][2:v]overlay=W-w-10:10[prelogo];
+    [tmp][2:v]overlay=W-w-20:20[rodfinal];
+    [pre][2:v]overlay=W-w-20:20[prelogo];
+    [post][2:v]overlay=W-w-20:20[postlogo];
     [prelogo][rodfinal][postlogo]concat=n=3:v=1:a=0[outv]
     `.replace(/\s+/g, ' ').trim(),
-    '-map', '[outv]', '-map', '0:a?',
+    '-map', '[outv]',
+    '-map', '0:a?',
     '-c:v', 'libx264',
     '-preset', 'fast',
     '-crf', '23',
     '-c:a', 'aac',
+    '-shortest',
     saida
   ], saida);
 }
@@ -187,13 +190,12 @@ async function montarSequencia() {
     arquivos[key] = nomeFinal;
   }
 
-  // Baixar e reencode padronizado de todos os vídeos (logo assumed PNG)
   await baixarERegistrar('video_principal', 'video_principal.mp4');
   await baixarERegistrar('video_inicial', 'video_inicial.mp4');
   await baixarERegistrar('video_miraplay', 'video_miraplay.mp4');
   await baixarERegistrar('video_final', 'video_final.mp4');
   await baixarERegistrar('rodape_id', 'rodape.mp4');
-  await baixarERegistrar('logo_id', 'logo.png'); // imagem, não reencode
+  await baixarERegistrar('logo_id', 'logo.png');
 
   const extras = [];
   for (let i = 0; i < input.videos_extras.length; i++) {
