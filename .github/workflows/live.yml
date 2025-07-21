@@ -112,10 +112,16 @@ jobs:
       - name: 📥 Clonar repositório
         uses: actions/checkout@v4
 
-      - name: 📦 Instalar dependências
+      - name: 📦 Instalar dependências e FFmpeg com suporte a RTMPS
         run: |
           sudo apt update
-          sudo apt install -y ffmpeg
+          sudo apt install -y wget unzip ca-certificates
+          wget https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+          tar -xf ffmpeg-release-amd64-static.tar.xz
+          cd ffmpeg-*-amd64-static
+          sudo mv ffmpeg ffprobe /usr/local/bin/
+          ffmpeg -version | grep -E "configuration|ssl|tls"
+          cd ..
           echo '{}' > package.json
           npm install puppeteer
 
