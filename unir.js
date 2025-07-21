@@ -42,7 +42,7 @@ function formatarDuracao(segundos) {
 async function reencode(inputFile, outputFile) {
   await executarFFmpeg([
     '-i', inputFile,
-    '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2',
+    '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1',
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '23',
@@ -96,7 +96,7 @@ async function inserirRodape(principal, rodape, logo, saida) {
     '-filter_complex',
     `[0:v]trim=0:240,setpts=PTS-STARTPTS[v0];` +
     `[0:v]trim=240:${240 + duracaoRodape},setpts=PTS-STARTPTS,scale=1000:500[v1];` +
-    `[1:v]scale=1280:720[v2];` +
+    `[1:v]scale=1280:720,setsar=1[v2];` +
     `[2:v]scale=120:120[logo];` +
     `[v2][v1]overlay=W-w-50:90[tmp];` +
     `[tmp][logo]overlay=W-w-10:10[v_rod];` +
@@ -165,11 +165,11 @@ async function montarSequencia() {
   const listaConcat = 'lista.txt';
   fs.writeFileSync(listaConcat, ordem.map(v => `file '${v}'`).join('\n'));
 
-  // Reencodifica vídeo final para garantir qualidade e compatibilidade com RTMP
   await executarFFmpeg([
     '-f', 'concat',
     '-safe', '0',
     '-i', listaConcat,
+    '-vf', 'setsar=1',
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '23',
