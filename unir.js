@@ -15,7 +15,7 @@ function registrarTemporario(caminho) {
 
 function executarFFmpeg(args, outputLabel) {
   return new Promise((resolve, reject) => {
-    // Colocando -fps_mode antes da entrada de arquivo
+    // Colocando -fps_mode antes do arquivo de entrada
     const ffmpeg = spawn('ffmpeg', ['-y', '-fps_mode', 'cfr', ...args]);
     ffmpeg.stderr.on('data', data => process.stderr.write(data));
     ffmpeg.on('close', code => {
