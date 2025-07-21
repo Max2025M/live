@@ -1,67 +1,79 @@
 const { spawn, execSync } = require('child_process');
 const fs = require('fs');
-const path = require('path');
 
-// 1. Verifica se o FFmpeg está instalado
+// Verifica se o FFmpeg está instalado
 try {
   execSync('ffmpeg -version', { stdio: 'ignore' });
-  console.log('✅ FFmpeg está instalado');
-} catch (error) {
-  console.log('⬇️ Instalando FFmpeg...');
+} catch (err) {
+  console.log('⬇️ FFmpeg não encontrado, instalando...');
   execSync('sudo apt update && sudo apt install -y ffmpeg');
 }
 
-// 2. Verifica se stream_info.json existe
-const configPath = path.resolve('stream_info.json');
-if (!fs.existsSync(configPath)) {
-  console.error('❌ stream_info.json não encontrado');
+// Carrega as configurações
+if (!fs.existsSync('stream_info.json')) {
+  console.error('❌ stream_info.json não encontrado!');
   process.exit(1);
 }
 
-// 3. Lê e valida a stream_url
-const info = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-const streamUrl = info.stream_url || info.stream;
+const config = JSON.parse(fs.readFileSync('stream_info.json', 'utf-8'));
+const streamUrl = config.stream_url || config.stream;
 
 if (!streamUrl || !streamUrl.startsWith('rtmp')) {
-  console.error('❌ URL de stream inválida ou ausente:', streamUrl);
+  console.error('❌ URL de transmissão inválida:', streamUrl);
   process.exit(1);
 }
 
-// 4. Define vídeo de entrada
-const inputVideo = path.resolve('video_final_completo.mp4');
-if (!fs.existsSync(inputVideo)) {
-  console.error(`❌ Vídeo de entrada não encontrado: ${inputVideo}`);
+const video = 'video_final_completo.mp4';
+if (!fs.existsSync(video)) {
+  console.error('❌ Arquivo de vídeo não encontrado:', video);
   process.exit(1);
 }
 
-// 5. Comando FFmpeg com redimensionamento forçado para 1920x1080 (16:9)
+console.log(`🚀 Transmitindo para ${streamUrl} em 1280x720 (HD)`);
+
+// Comando do FFmpeg
 const ffmpegArgs = [
-  '-re',                          // Lê em tempo real
-  '-i', inputVideo,              // Entrada
-  '-vf', 'scale=1920:1080',      // Força proporção 16:9
-  '-c:v', 'libx264',             // Codec de vídeo
-  '-preset', 'veryfast',         // Encoder rápido
-  '-b:v', '4500k',               // Bitrate de vídeo
-  '-maxrate', '5000k',
-  '-bufsize', '10000k',
+  '-re',                   // Leitura em tempo real
+  '-i', video,             // Vídeo de entrada
+  '-vf', 'scale=1280:720', // Força proporção 16:9 HD
+  '-c:v', 'libx264',
+  '-preset', 'veryfast',
+  '-b:v', '2500k',
+  '-maxrate', '3000k',
+  '-bufsize', '6000k',
   '-pix_fmt', 'yuv420p',
-  '-g', '60',                    // Keyframe a cada 2 segundos (30fps)
-  '-c:a', 'aac',                 // Codec de áudio
-  '-b:a', '160k',
+  '-g', '50',              // Keyframe a cada ~2s (25fps)
+  '-c:a', 'aac',
+  '-b:a', '128k',
   '-ar', '44100',
-  '-f', 'flv',                   // Formato para RTMP
+  '-f', 'flv',             // Formato para RTMP
   streamUrl
 ];
 
-// 6. Iniciar transmissão
-console.log(`🚀 Transmitindo para ${streamUrl} com resolução forçada 1920x1080`);
+const ffmpeg = spawn('ffmpeg', ffmpegArgs);
 
-const ffmpeg = spawn('ffmpeg', ffmpegArgs, { stdio: 'inherit' });
+// Captura logs detalhados
+ffmpeg.stdout?.on('data', (data) => {
+  console.log(`[stdout] ${data}`);
+});
 
-ffmpeg.on('close', code => {
-  if (code === 0) {
-    console.log('✅ Transmissão finalizada com sucesso!');
+ffmpeg.stderr?.on('data', (data) => {
+  const msg = data.toString();
+  if (msg.includes('error') || msg.includes('Error') || msg.includes('Invalid')) {
+    console.error(`[stderr] ⚠️ ${msg}`);
   } else {
-    console.error(`❌ Erro na transmissão. Código: ${code}`);
+    console.log(`[stderr] ${msg}`);
   }
+});
+
+ffmpeg.on('close', (code) => {
+  if (code === 0) {
+    console.log('✅ Transmissão encerrada com sucesso');
+  } else {
+    console.error(`❌ FFmpeg terminou com erro. Código de saída: ${code}`);
+  }
+});
+
+ffmpeg.on('error', (err) => {
+  console.error('❌ Erro ao executar FFmpeg:', err);
 });
