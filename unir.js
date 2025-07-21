@@ -56,9 +56,9 @@ async function baixarArquivo(remoto, destino) {
     rclone.stderr.on('data', data => process.stderr.write(data));
     rclone.on('close', async code => {
       if (code === 0) {
-        const nome = path.basename(remoto);
-        if (!fs.existsSync(nome)) return reject(new Error(`Arquivo não encontrado: ${nome}`));
-        fs.renameSync(nome, destino);
+        const nomeOriginal = path.basename(remoto);
+        if (!fs.existsSync(nomeOriginal)) return reject(new Error(`Arquivo não encontrado: ${nomeOriginal}`));
+        fs.renameSync(nomeOriginal, destino);
         registrarTemporario(destino);
         const temp = destino.replace(/(\.[^.]+)$/, '_temp$1');
         await reencode(destino, temp);
@@ -108,7 +108,6 @@ async function cortarVideo(video, parte1, parte2) {
 }
 
 function corrigirURL(url) {
-  // Remove barras duplas seguidas exceto após protocolo (http:// ou rtmps://)
   return url.replace(/([^:]\/)\/+/g, '$1');
 }
 
@@ -117,49 +116,48 @@ async function montarVideoFinal() {
     if (input[chave]) {
       await baixarArquivo(input[chave], nomeArquivo);
       arquivos[chave] = nomeArquivo;
+    } else {
+      throw new Error(`Chave ausente no input: ${chave}`);
     }
   };
 
-  // Baixar todos os vídeos e logo
-  await baixar('video_principal', 'principal.mp4');
-  await baixar('video_inicial', 'inicial.mp4');
-  await baixar('video_miraplay', 'miraplay.mp4');
-  await baixar('video_final', 'final.mp4');
+  // Baixar arquivos com nomes fixos
+  await baixar('video_principal', 'video_principal.mp4');
+  await baixar('video_inicial', 'video_inicial.mp4');
+  await baixar('video_miraplay', 'video_miraplay.mp4');
+  await baixar('video_final', 'video_final.mp4');
   await baixarArquivo(input.rodape_id, 'rodape.mp4');
   await baixarArquivo(input.logo_id, 'logo.png');
 
   arquivos['rodape'] = 'rodape.mp4';
   arquivos['logo'] = 'logo.png';
 
-  // Baixar extras
+  // Baixar vídeos extras
   arquivos.extras = [];
   if (Array.isArray(input.videos_extras)) {
     for (let i = 0; i < input.videos_extras.length; i++) {
-      const nome = `extra_${i}.mp4`;
+      const nome = `video_extra_${i}.mp4`;
       await baixarArquivo(input.videos_extras[i], nome);
       arquivos.extras.push(nome);
     }
   }
 
-  // Cortar vídeo principal
-  await cortarVideo(arquivos.video_principal, 'parte1.mp4', 'parte2.mp4');
-
-  // Inserir logo + rodapé nas duas partes
+  // Cortar e processar partes do principal
+  await cortarVideo('video_principal.mp4', 'parte1.mp4', 'parte2.mp4');
   await inserirLogoERodape('parte1.mp4', arquivos.rodape, arquivos.logo, 'parte1_final.mp4');
   await inserirLogoERodape('parte2.mp4', arquivos.rodape, arquivos.logo, 'parte2_final.mp4');
 
-  // Montar lista concatenação
+  // Lista de concatenação com nomes corretos
   const listaConcat = [
     'parte1_final.mp4',
-    arquivos.video_inicial,
-    arquivos.video_miraplay,
+    'video_inicial.mp4',
+    'video_miraplay.mp4',
     ...arquivos.extras,
-    arquivos.video_inicial,
+    'video_inicial.mp4',
     'parte2_final.mp4',
-    arquivos.video_final
+    'video_final.mp4'
   ];
 
-  // Garante que todos os arquivos existam antes de criar lista
   for (const f of listaConcat) {
     if (!fs.existsSync(f)) {
       throw new Error(`Arquivo para concatenação não encontrado: ${f}`);
@@ -178,9 +176,8 @@ async function montarVideoFinal() {
     'video_final_completo.mp4'
   ], 'video_final_completo.mp4');
 
-  // Corrige a URL da stream removendo barras duplas extras
+  // Corrigir URL da stream
   const stream_url = corrigirURL(input.stream_url);
-
   const duracao = await obterDuracao('video_final_completo.mp4');
   const tamanho = fs.statSync('video_final_completo.mp4').size / 1024 / 1024;
 
@@ -193,7 +190,7 @@ async function montarVideoFinal() {
     stream: stream_url
   }, null, 2));
 
-  // Remover arquivos temporários baixados
+  // Limpeza
   for (const file of arquivosTemporarios) {
     try {
       fs.unlinkSync(file);
@@ -203,7 +200,7 @@ async function montarVideoFinal() {
     }
   }
 
-  console.log('🧹 Todos os arquivos temporários foram removidos.');
+  console.log('✅ Finalizado com sucesso.');
 }
 
 montarVideoFinal().catch(err => {
