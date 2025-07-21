@@ -39,15 +39,25 @@ function formatarDuracao(segundos) {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
-async function reencode(inputFile, outputFile) {
+/**
+ * Reencode vídeo para padrão fixo:
+ * - Resolução 1280x720
+ * - Codec vídeo libx264, preset veryfast, crf 23
+ * - Codec áudio AAC 128k
+ * - Taxa de frames 25 fps
+ * - Formato mp4
+ */
+async function reencodePadronizado(inputFile, outputFile) {
   await executarFFmpeg([
     '-i', inputFile,
     '-vf', 'scale=1280:720',
+    '-r', '25',
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '23',
     '-c:a', 'aac',
     '-b:a', '128k',
+    '-movflags', '+faststart', // ajuda em compatibilidade de streaming
     '-f', 'mp4',
     outputFile
   ], outputFile);
@@ -64,10 +74,15 @@ async function baixarArquivo(remoto, destino) {
         fs.renameSync(nome, destino);
         registrarTemporario(destino);
 
-        const temp = destino.replace(/(\.[^.]+)$/, '_temp$1');
-        await reencode(destino, temp);
-        fs.renameSync(temp, destino);
-        console.log(`📥 Vídeo reencodado: ${destino}`);
+        // Só reencode se for vídeo (supondo extensão mp4)
+        if (destino.toLowerCase().endsWith('.mp4')) {
+          const temp = destino.replace(/(\.[^.]+)$/, '_temp$1');
+          await reencodePadronizado(destino, temp);
+          fs.renameSync(temp, destino);
+          console.log(`📥 Vídeo reencodado e padronizado: ${destino}`);
+        } else {
+          console.log(`📥 Arquivo não é mp4, pulando reencode: ${destino}`);
+        }
 
         resolve();
       } else {
@@ -84,6 +99,7 @@ async function cortarMeio(videoPath, parte1, parte2) {
   await executarFFmpeg([
     '-i', videoPath,
     '-t', metade.toFixed(2),
+    '-r', '25',
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '23',
@@ -94,6 +110,7 @@ async function cortarMeio(videoPath, parte1, parte2) {
   await executarFFmpeg([
     '-i', videoPath,
     '-ss', metade.toFixed(2),
+    '-r', '25',
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '23',
@@ -170,12 +187,13 @@ async function montarSequencia() {
     arquivos[key] = nomeFinal;
   }
 
+  // Baixar e reencode padronizado de todos os vídeos (logo assumed PNG)
   await baixarERegistrar('video_principal', 'video_principal.mp4');
   await baixarERegistrar('video_inicial', 'video_inicial.mp4');
   await baixarERegistrar('video_miraplay', 'video_miraplay.mp4');
   await baixarERegistrar('video_final', 'video_final.mp4');
-  await baixarERegistrar('logo_id', 'logo.png');
   await baixarERegistrar('rodape_id', 'rodape.mp4');
+  await baixarERegistrar('logo_id', 'logo.png'); // imagem, não reencode
 
   const extras = [];
   for (let i = 0; i < input.videos_extras.length; i++) {
@@ -210,6 +228,7 @@ async function montarSequencia() {
     '-preset', 'fast',
     '-crf', '23',
     '-c:a', 'aac',
+    '-r', '25',
     'video_final_completo.mp4'
   ], 'video_final_completo.mp4');
 
