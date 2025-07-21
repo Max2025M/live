@@ -42,13 +42,15 @@ function formatarDuracao(segundos) {
 async function reencode(inputFile, outputFile) {
   await executarFFmpeg([
     '-i', inputFile,
-    '-vf', 'scale=1280:720',
+    '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2',
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '23',
+    '-pix_fmt', 'yuv420p',
     '-c:a', 'aac',
     '-b:a', '128k',
-    '-f', 'mp4',
+    '-ar', '44100',
+    '-movflags', '+faststart',
     outputFile
   ], outputFile);
 }
@@ -64,12 +66,10 @@ async function baixarArquivo(remoto, destino) {
         fs.renameSync(nome, destino);
         registrarTemporario(destino);
 
-        // Reencodifica tudo para garantir estrutura binária uniforme
         const temp = destino.replace(/(\.[^.]+)$/, '_temp$1');
         await reencode(destino, temp);
         fs.renameSync(temp, destino);
         console.log(`📥 Arquivo baixado e reencodado: ${destino}`);
-
         resolve();
       } else {
         reject(new Error(`Erro ao baixar ${remoto}`));
@@ -104,7 +104,12 @@ async function inserirRodape(principal, rodape, logo, saida) {
     `[v0][v_rod][v3]concat=n=3:v=1:a=0[outv]`,
     '-map', '[outv]', '-map', '0:a?',
     '-c:v', 'libx264',
+    '-pix_fmt', 'yuv420p',
+    '-preset', 'veryfast',
+    '-crf', '23',
     '-c:a', 'aac',
+    '-b:a', '128k',
+    '-movflags', '+faststart',
     saida
   ], saida);
 }
@@ -141,8 +146,8 @@ async function montarSequencia() {
 
   await cortarMeio(arquivos.video_principal, 'parte1.mp4', 'parte2.mp4');
 
-  let parte1_final = 'parte1_final.mp4';
-  let parte2_final = 'parte2_final.mp4';
+  const parte1_final = 'parte1_final.mp4';
+  const parte2_final = 'parte2_final.mp4';
 
   await inserirRodape('parte1.mp4', arquivos.rodape_id, arquivos.logo_id, parte1_final);
   await inserirRodape('parte2.mp4', arquivos.rodape_id, arquivos.logo_id, parte2_final);
@@ -160,11 +165,19 @@ async function montarSequencia() {
   const listaConcat = 'lista.txt';
   fs.writeFileSync(listaConcat, ordem.map(v => `file '${v}'`).join('\n'));
 
+  // Reencodifica vídeo final para garantir qualidade e compatibilidade com RTMP
   await executarFFmpeg([
     '-f', 'concat',
     '-safe', '0',
     '-i', listaConcat,
-    '-c', 'copy',
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-crf', '23',
+    '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    '-ar', '44100',
+    '-movflags', '+faststart',
     'video_final_completo.mp4'
   ], 'video_final_completo.mp4');
 
@@ -175,7 +188,9 @@ async function montarSequencia() {
 
   const streamInfo = {
     id: input.id || 'sem_id',
-    stream: normalizarStreamUrl(input.stream_url)
+    stream: normalizarStreamUrl(input.stream_url),
+    duracao: duracaoFormatada,
+    tamanho_mb: tamanhoMB
   };
 
   fs.writeFileSync('stream_info.json', JSON.stringify(streamInfo, null, 2));
