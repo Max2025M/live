@@ -15,7 +15,6 @@ function registrarTemporario(caminho) {
 
 function executarFFmpeg(args, outputLabel) {
   return new Promise((resolve, reject) => {
-    // Colocando -fps_mode antes do arquivo de entrada
     const ffmpeg = spawn('ffmpeg', ['-y', '-fps_mode', 'cfr', ...args]);
     ffmpeg.stderr.on('data', data => process.stderr.write(data));
     ffmpeg.on('close', code => {
@@ -40,25 +39,26 @@ function formatarDuracao(segundos) {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
-async function reencodePadronizado(inputFile, outputFile) {
+async function reencode(input, output) {
+  console.log(`🔄 Reencodificando ${input} para ${output}...`);
   await executarFFmpeg([
-    '-fflags', '+genpts',
-    '-avoid_negative_ts', 'make_zero',
-    '-i', inputFile,
-    '-vf', 'scale=1280:720',
-    // Remover o parâmetro -r para evitar conflito com -vsync
+    '-i', input,
+    '-vf', 'scale=1280:720,fps=30',
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '23',
     '-c:a', 'aac',
-    '-b:a', '128k',
-    '-map', '0:v:0',
-    '-map', '0:a?',
-    '-shortest',
-    '-movflags', '+faststart',
-    '-f', 'mp4',
-    outputFile
-  ], outputFile);
+    output
+  ]);
+  registrarTemporario(output);
+}
+
+async function cortarVideo(input, out1, out2, meio) {
+  console.log(`✂️ Cortando vídeo ${input}...`);
+  await executarFFmpeg(['-i', input, '-t', meio.toString(), '-c', 'copy', out1]);
+  await executarFFmpeg(['-i', input, '-ss', meio.toString(), '-c', 'copy', out2]);
+  registrarTemporario(out1);
+  registrarTemporario(out2);
 }
 
 async function baixarArquivo(remoto, destino) {
@@ -74,7 +74,7 @@ async function baixarArquivo(remoto, destino) {
 
         if (destino.toLowerCase().endsWith('.mp4')) {
           const temp = destino.replace(/(\.[^.]+)$/, '_temp$1');
-          await reencodePadronizado(destino, temp);
+          await reencode(destino, temp);
           fs.renameSync(temp, destino);
           console.log(`📥 Vídeo reencodado e padronizado: ${destino}`);
         } else {
@@ -89,51 +89,11 @@ async function baixarArquivo(remoto, destino) {
   });
 }
 
-async function cortarMeio(videoPath, parte1, parte2) {
-  const duracao = await obterDuracao(videoPath);
-  const metade = duracao / 2;
-
-  await executarFFmpeg([
-    '-fflags', '+genpts',
-    '-avoid_negative_ts', 'make_zero',
-    '-i', videoPath,
-    '-t', metade.toFixed(2),
-    '-r', '25',
-    '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-crf', '23',
-    '-c:a', 'aac',
-    '-map', '0:v:0',
-    '-map', '0:a?',
-    '-shortest',
-    parte1
-  ], parte1);
-
-  await executarFFmpeg([
-    '-fflags', '+genpts',
-    '-avoid_negative_ts', 'make_zero',
-    '-i', videoPath,
-    '-ss', metade.toFixed(2),
-    '-r', '25',
-    '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-crf', '23',
-    '-c:a', 'aac',
-    '-map', '0:v:0',
-    '-map', '0:a?',
-    '-shortest',
-    parte2
-  ], parte2);
-}
-
 async function inserirRodape(principal, rodape, logo, saida) {
   const duracaoRodape = await obterDuracao(rodape);
   const inicioRodape = 240;
   const fimRodape = inicioRodape + duracaoRodape;
 
-  // Ajuste no logo para tamanho fixo e posição na tela
-  const logoOverlay = "[2:v]scale=200:-1[logo];[pre][logo]overlay=W-w-20:20[prelogo];[post][logo]overlay=W-w-20:20[postlogo]";
-  
   await executarFFmpeg([
     '-fflags', '+genpts',
     '-avoid_negative_ts', 'make_zero',
@@ -209,6 +169,21 @@ async function montarSequencia() {
   await baixarERegistrar('rodape_id', 'rodape.mp4');
   await baixarERegistrar('logo_id', 'logo.png');
 
+  // Cortando o vídeo principal ao meio
+  const duracao = await obterDuracao(arquivos.video_principal);
+  const meio = duracao / 2;
+  await cortarVideo(arquivos.video_principal, 'parte1.mp4', 'parte2.mp4', meio);
+
+  // Reencodificando as partes cortadas
+  await reencode('parte1.mp4', 'parte1_final.mp4');
+  await reencode('parte2.mp4', 'parte2_final.mp4');
+
+  // Reencodificando outros vídeos, se necessário
+  await reencode(arquivos.video_inicial, 'video_inicial_final.mp4');
+  await reencode(arquivos.video_miraplay, 'video_miraplay_final.mp4');
+  await reencode(arquivos.video_final, 'video_final_final.mp4');
+
+  // Criando a lista de arquivos para concatenação
   const extras = [];
   for (let i = 0; i < input.videos_extras.length; i++) {
     const nome = `extra_${i}.mp4`;
@@ -216,10 +191,7 @@ async function montarSequencia() {
     extras.push(nome);
   }
 
-  await cortarMeio(arquivos.video_principal, 'parte1.mp4', 'parte2.mp4');
-  await inserirRodape('parte1.mp4', arquivos.rodape_id, arquivos.logo_id, 'parte1_final.mp4');
-  await inserirRodape('parte2.mp4', arquivos.rodape_id, arquivos.logo_id, 'parte2_final.mp4');
-
+  // Ordem exata para concatenação
   const ordem = [
     'parte1_final.mp4',
     'video_inicial.mp4',
@@ -260,6 +232,7 @@ async function montarSequencia() {
 
   console.log(`✅ Finalizado com ${tamanhoMB} MB e duração ${duracaoFormatada}`);
 
+  // Iniciando a transmissão para o Facebook
   await transmitirFacebook('video_final_completo.mp4', input.stream_url);
 }
 
