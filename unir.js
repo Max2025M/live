@@ -41,6 +41,8 @@ function formatarDuracao(segundos) {
 
 async function reencodePadronizado(inputFile, outputFile) {
   await executarFFmpeg([
+    '-fflags', '+genpts',
+    '-avoid_negative_ts', 'make_zero',
     '-i', inputFile,
     '-vf', 'scale=1280:720',
     '-r', '25',
@@ -53,7 +55,9 @@ async function reencodePadronizado(inputFile, outputFile) {
     '-map', '0:a?',
     '-shortest',
     '-movflags', '+faststart',
-    '-f', 'mp4',
+    '-vsync', '1', 
+    '-async', '1', 
+    '-copyts',  
     outputFile
   ], outputFile);
 }
@@ -69,7 +73,7 @@ async function baixarArquivo(remoto, destino) {
         fs.renameSync(nome, destino);
         registrarTemporario(destino);
 
-        if (destino.toLowerCase().endsWith('.mp4')) {
+        if (destino.toLowerCase().endswith('.mp4')) {
           const temp = destino.replace(/(\.[^.]+)$/, '_temp$1');
           await reencodePadronizado(destino, temp);
           fs.renameSync(temp, destino);
@@ -91,6 +95,8 @@ async function cortarMeio(videoPath, parte1, parte2) {
   const metade = duracao / 2;
 
   await executarFFmpeg([
+    '-fflags', '+genpts',
+    '-avoid_negative_ts', 'make_zero',
     '-i', videoPath,
     '-t', metade.toFixed(2),
     '-r', '25',
@@ -101,10 +107,15 @@ async function cortarMeio(videoPath, parte1, parte2) {
     '-map', '0:v:0',
     '-map', '0:a?',
     '-shortest',
+    '-vsync', '1',
+    '-async', '1',
+    '-copyts',
     parte1
   ], parte1);
 
   await executarFFmpeg([
+    '-fflags', '+genpts',
+    '-avoid_negative_ts', 'make_zero',
     '-i', videoPath,
     '-ss', metade.toFixed(2),
     '-r', '25',
@@ -115,16 +126,21 @@ async function cortarMeio(videoPath, parte1, parte2) {
     '-map', '0:v:0',
     '-map', '0:a?',
     '-shortest',
+    '-vsync', '1',
+    '-async', '1',
+    '-copyts',
     parte2
   ], parte2);
 }
 
 async function inserirRodape(principal, rodape, logo, saida) {
   const duracaoRodape = await obterDuracao(rodape);
-  const inicioRodape = 240; // minuto 4
+  const inicioRodape = 240;
   const fimRodape = inicioRodape + duracaoRodape;
 
   await executarFFmpeg([
+    '-fflags', '+genpts',
+    '-avoid_negative_ts', 'make_zero',
     '-i', principal,
     '-i', rodape,
     '-i', logo,
@@ -134,9 +150,10 @@ async function inserirRodape(principal, rodape, logo, saida) {
     [0:v]trim=${inicioRodape}:${fimRodape},setpts=PTS-STARTPTS[cut];
     [0:v]trim=${fimRodape},setpts=PTS-STARTPTS[post];
     [1:v]scale=1280:720[rod];
-    [cut]scale=426:240[mini];
-    [rod][mini]overlay=W-w-50:90[tmp];
-    [tmp][2:v]overlay=W-w-20:20[rodfinal];
+    [cut]scale=1920:1080[mainvideo];  // Aumentando o tamanho do vídeo principal
+    [rod][mainvideo]overlay=W-w-50:90[tmp];  // Ajustando o overlay para o rodapé
+    [tmp][2:v]scale=200:200[logo_scaled];  // Ajustando o tamanho do logo para 200x200
+    [logo_scaled]overlay=W-w-20:20[rodfinal]; // Logo posicionado no canto superior direito
     [pre][2:v]overlay=W-w-20:20[prelogo];
     [post][2:v]overlay=W-w-20:20[postlogo];
     [prelogo][rodfinal][postlogo]concat=n=3:v=1:a=0[outv]
@@ -148,6 +165,9 @@ async function inserirRodape(principal, rodape, logo, saida) {
     '-crf', '23',
     '-c:a', 'aac',
     '-shortest',
+    '-vsync', '1',
+    '-async', '1',
+    '-copyts',
     saida
   ], saida);
 }
@@ -167,7 +187,10 @@ async function transmitirFacebook(videoPath, rtmpUrl) {
       '-c:a', 'aac',
       '-b:a', '128k',
       '-f', 'flv',
-      rtmpUrl
+      rtmpUrl,
+      '-vsync', '1',
+      '-async', '1',
+      '-copyts',
     ]);
     ffmpeg.stderr.on('data', data => process.stderr.write(data));
     ffmpeg.on('close', code => {
@@ -190,68 +213,22 @@ async function montarSequencia() {
     arquivos[key] = nomeFinal;
   }
 
-  await baixarERegistrar('video_principal', 'video_principal.mp4');
-  await baixarERegistrar('video_inicial', 'video_inicial.mp4');
-  await baixarERegistrar('video_miraplay', 'video_miraplay.mp4');
-  await baixarERegistrar('video_final', 'video_final.mp4');
-  await baixarERegistrar('rodape_id', 'rodape.mp4');
-  await baixarERegistrar('logo_id', 'logo.png');
+  await baixarERegistrar('video_principal', 'video.mp4');
+  await baixarERegistrar('video_rodape', 'rodape.mp4');
+  await baixarERegistrar('logo', 'logo.png');
+  await baixarERegistrar('rtmpUrl', 'rtmpUrl.txt');
 
-  const extras = [];
-  for (let i = 0; i < input.videos_extras.length; i++) {
-    const nome = `extra_${i}.mp4`;
-    await baixarArquivo(input.videos_extras[i], nome);
-    extras.push(nome);
-  }
+  const rtmpUrl = fs.readFileSync('rtmpUrl.txt', 'utf-8').trim();
+  console.log(`RTMP URL: ${rtmpUrl}`);
 
-  await cortarMeio(arquivos.video_principal, 'parte1.mp4', 'parte2.mp4');
+  const parte1 = 'parte1.mp4';
+  const parte2 = 'parte2.mp4';
 
-  await inserirRodape('parte1.mp4', arquivos.rodape_id, arquivos.logo_id, 'parte1_final.mp4');
-  await inserirRodape('parte2.mp4', arquivos.rodape_id, arquivos.logo_id, 'parte2_final.mp4');
-
-  const ordem = [
-    'parte1_final.mp4',
-    'video_inicial.mp4',
-    'video_miraplay.mp4',
-    ...extras,
-    'video_inicial.mp4',
-    'parte2_final.mp4',
-    'video_final.mp4'
-  ];
-
-  const listaConcat = 'lista.txt';
-  fs.writeFileSync(listaConcat, ordem.map(v => `file '${v}'`).join('\n'));
-
-  await executarFFmpeg([
-    '-f', 'concat',
-    '-safe', '0',
-    '-i', listaConcat,
-    '-c:v', 'libx264',
-    '-preset', 'fast',
-    '-crf', '23',
-    '-c:a', 'aac',
-    '-r', '25',
-    'video_final_completo.mp4'
-  ], 'video_final_completo.mp4');
-
-  const stats = fs.statSync('video_final_completo.mp4');
-  const duracaoFinal = await obterDuracao('video_final_completo.mp4');
-  const duracaoFormatada = formatarDuracao(duracaoFinal);
-  const tamanhoMB = Math.round(stats.size / 1024 / 1024);
-
-  fs.writeFileSync('stream_info.json', JSON.stringify({
-    id: input.id,
-    stream: input.stream_url
-  }, null, 2));
-
-  console.log(`✅ Finalizado com ${tamanhoMB} MB e duração ${duracaoFormatada}`);
-
-  await transmitirFacebook('video_final_completo.mp4', input.stream_url);
+  await cortarMeio(arquivos.video_principal, parte1, parte2);
+  await inserirRodape(parte1, arquivos.video_rodape, arquivos.logo, 'video_com_rodape.mp4');
+  await transmitirFacebook('video_com_rodape.mp4', rtmpUrl);
 }
 
-montarSequencia()
-  .then(() => process.exit(0))
-  .catch(err => {
-    console.error('❌ Erro:', err.message);
-    process.exit(1);
-  });
+montarSequencia().catch(err => {
+  console.error(err);
+});
