@@ -1,12 +1,13 @@
 const fs = require('fs');
 const { spawn } = require('child_process');
 
-// Verificar stream_info.json
+// Verificar se o arquivo stream_info.json existe
 if (!fs.existsSync('stream_info.json')) {
   console.error('❌ stream_info.json não encontrado');
   process.exit(1);
 }
 
+// Ler URL do stream
 const info = JSON.parse(fs.readFileSync('stream_info.json', 'utf-8'));
 const streamUrl = info.stream;
 
@@ -22,51 +23,63 @@ if (!fs.existsSync(inputFile)) {
   process.exit(1);
 }
 
-console.log('🚀 Transmitindo para YouTube/Facebook em proporção 16:9 (1920x1080)');
+console.log('🚀 Transmitindo em 1280x720 (HD) - Bitrate reduzido');
 console.log(`🎯 URL de destino: ${streamUrl}`);
 
+// Buffer para capturar erros
 let stderrBuffer = '';
 
 const ffmpeg = spawn('ffmpeg', [
-  '-re',                            // Tempo real
-  '-i', inputFile,                  // Arquivo de entrada
-  '-vf', 'scale=1920:1080',         // Escala para 1080p
-  '-c:v', 'libx264',                // Codificador de vídeo
-  '-preset', 'veryfast',            // Performance
-  '-b:v', '6000k',                  // Bitrate vídeo
-  '-maxrate', '6500k',              // Bitrate máximo
-  '-bufsize', '9000k',              // Buffer
-  '-pix_fmt', 'yuv420p',            // Compatibilidade
-  '-g', '50',                       // Keyframe a cada 2s (25fps)
-  '-c:a', 'aac',                    // Codificador de áudio
-  '-b:a', '160k',                   // Bitrate de áudio
-  '-ar', '44100',                   // Sample rate
-  '-f', 'flv',                      // Formato de saída
-  streamUrl                         // URL de destino
+  '-re',                      // Tempo real
+  '-i', inputFile,            // Entrada
+  '-vf', 'scale=1280:720',    // Reduz resolução
+  '-c:v', 'libx264',          // Vídeo: H.264
+  '-preset', 'veryfast',      // Desempenho
+  '-b:v', '3000k',            // Bitrate de vídeo mais leve
+  '-maxrate', '3500k',        // Pico de bitrate
+  '-bufsize', '5000k',        // Buffer
+  '-pix_fmt', 'yuv420p',      // Compatibilidade
+  '-g', '50',                 // Keyframes
+  '-c:a', 'aac',              // Áudio: AAC
+  '-b:a', '128k',             // Bitrate de áudio menor
+  '-ar', '44100',             // Sample rate
+  '-f', 'flv',                // Formato RTMP
+  streamUrl                   // Destino
 ]);
 
-// Captura o stderr e também imprime ao vivo
+// Captura do stderr
 ffmpeg.stderr.on('data', data => {
   const msg = data.toString();
   stderrBuffer += msg;
   process.stderr.write(msg);
 });
 
-// Quando o processo terminar, exibe resumo
+// Finalização
 ffmpeg.on('close', code => {
   console.log('\n🔚 FFmpeg finalizado');
   if (code === 0) {
-    console.log('✅ Transmissão finalizada com sucesso');
+    console.log('✅ Transmissão concluída com sucesso');
   } else {
     console.error(`❌ FFmpeg terminou com código ${code}`);
-    if (stderrBuffer.includes('TLS') || stderrBuffer.includes('Input/output error')) {
-      console.error('\n⚠️ Detalhe: erro de conexão TLS. Verifique se a chave está correta ou se há problema com a URL RTMPS.');
+    const ultimas = stderrBuffer.split('\n').slice(-30).filter(l => l.trim() !== '');
+    const ultimaLinha = ultimas[ultimas.length - 1] || 'Sem detalhes';
+
+    console.log('\n📄 Últimas mensagens relevantes do FFmpeg:');
+    console.log(ultimas.join('\n'));
+
+    console.log('\n🔍 Última linha de erro detectada:');
+    console.error('👉', ultimaLinha);
+
+    // Sugestão de causa
+    if (ultimaLinha.includes('TLS') || ultimaLinha.includes('Input/output error')) {
+      console.error('⚠️ Problema possível: erro de conexão (RTMPS), verifique chave de transmissão ou conectividade.');
+    } else if (ultimaLinha.includes('Could not write') || ultimaLinha.includes('Connection reset')) {
+      console.error('⚠️ Problema ao enviar dados. Verifique internet ou bloqueio na plataforma de destino.');
     }
-    console.log('\n📄 Últimas mensagens do FFmpeg:');
-    console.log(stderrBuffer.split('\n').slice(-20).join('\n')); // mostra últimas 20 linhas
   }
 });
 
+// Erro direto no spawn
 ffmpeg.on('error', err => {
-  console.error('❌ Erro ao executar o FFmpeg:', err.message || err);
+  console.error('❌ Erro ao executar FFmpeg:', err.message || err);
 });
