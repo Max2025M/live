@@ -15,7 +15,8 @@ function registrarTemporario(caminho) {
 
 function executarFFmpeg(args, outputLabel) {
   return new Promise((resolve, reject) => {
-    const ffmpeg = spawn('ffmpeg', ['-y', '-vsync', '2', '-async', '1', ...args]);
+    // Usando -vsync 2 e -fps_mode cfr para garantir sincronização sem conflito de fps
+    const ffmpeg = spawn('ffmpeg', ['-y', '-vsync', '2', '-fps_mode', 'cfr', ...args]);
     ffmpeg.stderr.on('data', data => process.stderr.write(data));
     ffmpeg.on('close', code => {
       if (code === 0) {
@@ -45,7 +46,7 @@ async function reencodePadronizado(inputFile, outputFile) {
     '-avoid_negative_ts', 'make_zero',
     '-i', inputFile,
     '-vf', 'scale=1280:720',
-    '-r', '25',
+    // Remover o parâmetro -r para evitar conflito com -vsync
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '23',
