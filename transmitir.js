@@ -1,85 +1,67 @@
+const { spawn, execSync } = require('child_process');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const path = require('path');
 
-// Verificar se o arquivo stream_info.json existe
-if (!fs.existsSync('stream_info.json')) {
+// 1. Verifica se o FFmpeg está instalado
+try {
+  execSync('ffmpeg -version', { stdio: 'ignore' });
+  console.log('✅ FFmpeg está instalado');
+} catch (error) {
+  console.log('⬇️ Instalando FFmpeg...');
+  execSync('sudo apt update && sudo apt install -y ffmpeg');
+}
+
+// 2. Verifica se stream_info.json existe
+const configPath = path.resolve('stream_info.json');
+if (!fs.existsSync(configPath)) {
   console.error('❌ stream_info.json não encontrado');
   process.exit(1);
 }
 
-// Ler URL do stream
-const info = JSON.parse(fs.readFileSync('stream_info.json', 'utf-8'));
-const streamUrl = info.stream;
+// 3. Lê e valida a stream_url
+const info = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+const streamUrl = info.stream_url || info.stream;
 
 if (!streamUrl || !streamUrl.startsWith('rtmp')) {
-  console.error('❌ URL de stream inválida:', streamUrl);
+  console.error('❌ URL de stream inválida ou ausente:', streamUrl);
   process.exit(1);
 }
 
-// Verificar vídeo de entrada
-const inputFile = 'video_final_completo.mp4';
-if (!fs.existsSync(inputFile)) {
-  console.error(`❌ Arquivo ${inputFile} não encontrado`);
+// 4. Define vídeo de entrada
+const inputVideo = path.resolve('video_final_completo.mp4');
+if (!fs.existsSync(inputVideo)) {
+  console.error(`❌ Vídeo de entrada não encontrado: ${inputVideo}`);
   process.exit(1);
 }
 
-console.log('🚀 Transmitindo em 1280x720 (HD) - Bitrate reduzido');
-console.log(`🎯 URL de destino: ${streamUrl}`);
+// 5. Comando FFmpeg com redimensionamento forçado para 1920x1080 (16:9)
+const ffmpegArgs = [
+  '-re',                          // Lê em tempo real
+  '-i', inputVideo,              // Entrada
+  '-vf', 'scale=1920:1080',      // Força proporção 16:9
+  '-c:v', 'libx264',             // Codec de vídeo
+  '-preset', 'veryfast',         // Encoder rápido
+  '-b:v', '4500k',               // Bitrate de vídeo
+  '-maxrate', '5000k',
+  '-bufsize', '10000k',
+  '-pix_fmt', 'yuv420p',
+  '-g', '60',                    // Keyframe a cada 2 segundos (30fps)
+  '-c:a', 'aac',                 // Codec de áudio
+  '-b:a', '160k',
+  '-ar', '44100',
+  '-f', 'flv',                   // Formato para RTMP
+  streamUrl
+];
 
-// Buffer para capturar erros
-let stderrBuffer = '';
+// 6. Iniciar transmissão
+console.log(`🚀 Transmitindo para ${streamUrl} com resolução forçada 1920x1080`);
 
-const ffmpeg = spawn('ffmpeg', [
-  '-re',                      // Tempo real
-  '-i', inputFile,            // Entrada
-  '-vf', 'scale=1280:720',    // Reduz resolução
-  '-c:v', 'libx264',          // Vídeo: H.264
-  '-preset', 'veryfast',      // Desempenho
-  '-b:v', '3000k',            // Bitrate de vídeo mais leve
-  '-maxrate', '3500k',        // Pico de bitrate
-  '-bufsize', '5000k',        // Buffer
-  '-pix_fmt', 'yuv420p',      // Compatibilidade
-  '-g', '50',                 // Keyframes
-  '-c:a', 'aac',              // Áudio: AAC
-  '-b:a', '128k',             // Bitrate de áudio menor
-  '-ar', '44100',             // Sample rate
-  '-f', 'flv',                // Formato RTMP
-  streamUrl                   // Destino
-]);
+const ffmpeg = spawn('ffmpeg', ffmpegArgs, { stdio: 'inherit' });
 
-// Captura do stderr
-ffmpeg.stderr.on('data', data => {
-  const msg = data.toString();
-  stderrBuffer += msg;
-  process.stderr.write(msg);
-});
-
-// Finalização
 ffmpeg.on('close', code => {
-  console.log('\n🔚 FFmpeg finalizado');
   if (code === 0) {
-    console.log('✅ Transmissão concluída com sucesso');
+    console.log('✅ Transmissão finalizada com sucesso!');
   } else {
-    console.error(`❌ FFmpeg terminou com código ${code}`);
-    const ultimas = stderrBuffer.split('\n').slice(-30).filter(l => l.trim() !== '');
-    const ultimaLinha = ultimas[ultimas.length - 1] || 'Sem detalhes';
-
-    console.log('\n📄 Últimas mensagens relevantes do FFmpeg:');
-    console.log(ultimas.join('\n'));
-
-    console.log('\n🔍 Última linha de erro detectada:');
-    console.error('👉', ultimaLinha);
-
-    // Sugestão de causa
-    if (ultimaLinha.includes('TLS') || ultimaLinha.includes('Input/output error')) {
-      console.error('⚠️ Problema possível: erro de conexão (RTMPS), verifique chave de transmissão ou conectividade.');
-    } else if (ultimaLinha.includes('Could not write') || ultimaLinha.includes('Connection reset')) {
-      console.error('⚠️ Problema ao enviar dados. Verifique internet ou bloqueio na plataforma de destino.');
-    }
+    console.error(`❌ Erro na transmissão. Código: ${code}`);
   }
-});
-
-// Erro direto no spawn
-ffmpeg.on('error', err => {
-  console.error('❌ Erro ao executar FFmpeg:', err.message || err);
 });
