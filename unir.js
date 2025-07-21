@@ -55,8 +55,8 @@ async function reencodePadronizado(inputFile, outputFile) {
     '-map', '0:a?',
     '-shortest',
     '-movflags', '+faststart',
-    '-vsync', '1', 
-    '-async', '1', 
+    '-vsync', '1',
+    '-async', '1',
     '-copyts',  
     outputFile
   ], outputFile);
@@ -73,7 +73,7 @@ async function baixarArquivo(remoto, destino) {
         fs.renameSync(nome, destino);
         registrarTemporario(destino);
 
-        if (destino.toLowerCase().endswith('.mp4')) {
+        if (destino.toLowerCase().endsWith('.mp4')) { // CORREÇÃO: endsWith() com "W" maiúsculo
           const temp = destino.replace(/(\.[^.]+)$/, '_temp$1');
           await reencodePadronizado(destino, temp);
           fs.renameSync(temp, destino);
