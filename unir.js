@@ -15,8 +15,8 @@ function registrarTemporario(caminho) {
 
 function executarFFmpeg(args, outputLabel) {
   return new Promise((resolve, reject) => {
-    // Usando -vsync 2 e -fps_mode cfr para garantir sincronização sem conflito de fps
-    const ffmpeg = spawn('ffmpeg', ['-y', '-vsync', '2', '-fps_mode', 'cfr', ...args]);
+    // Colocando -fps_mode antes da entrada de arquivo
+    const ffmpeg = spawn('ffmpeg', ['-y', '-fps_mode', 'cfr', ...args]);
     ffmpeg.stderr.on('data', data => process.stderr.write(data));
     ffmpeg.on('close', code => {
       if (code === 0) {
