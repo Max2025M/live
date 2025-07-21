@@ -111,16 +111,18 @@ async function inserirRodape(principal, rodape, logo, saida) {
     '-i', rodape,
     '-i', logo,
     '-filter_complex',
-    `[0:v]trim=0:240,setpts=PTS-STARTPTS[pre];` +
-    `[0:v]trim=240:${fimRodape},setpts=PTS-STARTPTS,scale=426:240[mini];` +
-    `[1:v]scale=1280:720[rod];` +
-    `[2:v]scale=100:100[logo];` +
-    `[rod][mini]overlay=W-w-50:90[tmp];` +
-    `[tmp][logo]overlay=W-w-10:10[rodfinal];` +
-    `[0:v]trim=${fimRodape},setpts=PTS-STARTPTS[post];` +
-    `[post][2:v]overlay=W-w-10:10[postlogo];` +
-    `[pre][logo]overlay=W-w-10:10[prelogo];` +
-    `[prelogo][rodfinal][postlogo]concat=n=3:v=1:a=0[outv]`,
+    `
+    [0:v]trim=0:240,setpts=PTS-STARTPTS[pre];
+    [0:v]trim=240:${fimRodape},setpts=PTS-STARTPTS[cut];
+    [1:v]scale=1280:720[rod];
+    [cut]scale=426:240[mini];
+    [rod][mini]overlay=W-w-50:90[tmp];
+    [tmp][2:v]overlay=W-w-10:10[rodfinal];
+    [0:v]trim=${fimRodape},setpts=PTS-STARTPTS[post];
+    [post][2:v]overlay=W-w-10:10[postlogo];
+    [pre][2:v]overlay=W-w-10:10[prelogo];
+    [prelogo][rodfinal][postlogo]concat=n=3:v=1:a=0[outv]
+    `.replace(/\s+/g, ' ').trim(),
     '-map', '[outv]', '-map', '0:a?',
     '-c:v', 'libx264',
     '-preset', 'fast',
