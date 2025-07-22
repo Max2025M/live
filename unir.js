@@ -192,7 +192,8 @@ async function transmitirSequencia() {
       videoLabels.push(`[v${i}]`);
     });
 
-    const filter = filterParts.join('; ') + `; ${videoLabels.join('')}concat=n=${videoLabels.length}:v=1:a=0[outv]`;
+    // CONCATENAR VÍDEO E ÁUDIO JUNTOS (a=1)
+    const filter = filterParts.join('; ') + `; ${videoLabels.join('')}concat=n=${videoLabels.length}:v=1:a=1[outv][outa]`;
 
     const args = [
       '-hide_banner',
@@ -200,7 +201,7 @@ async function transmitirSequencia() {
       ...ffmpegArgs,
       '-filter_complex', filter,
       '-map', '[outv]',
-      ...inputs.map((_, i) => ['-map', `${i}:a?`]).flat(),
+      '-map', '[outa]',
       '-c:v', 'libx264',
       '-preset', 'veryfast',
       '-crf', '23',
