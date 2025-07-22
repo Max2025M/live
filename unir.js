@@ -111,16 +111,16 @@ async function aplicarOverlayParte(parte, logo, rodape, output) {
   registrarTemporario(output);
 }
 
-async function iniciarTransmissao(listaArquivos, streamURL) {
-  const playlist = 'playlist.txt';
-  fs.writeFileSync(playlist, listaArquivos.map(f => `file '${f}'`).join('\n'));
-  registrarTemporario(playlist);
+async function iniciarTransmissaoEmTempoReal(listaArquivos, streamURL) {
+  const playlistPath = 'sequencia_da_transmissao.txt';
+  fs.writeFileSync(playlistPath, listaArquivos.map(f => `file '${f}'`).join('\n'));
+  registrarTemporario(playlistPath);
 
-  console.log(`📡 Iniciando transmissão para: ${streamURL}`);
+  console.log(`📡 Enviando vídeos em tempo real para: ${streamURL}`);
   await executarFFmpeg([
     '-f', 'concat',
     '-safe', '0',
-    '-i', playlist,
+    '-i', playlistPath,
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-profile:v', 'main',
@@ -135,7 +135,7 @@ async function iniciarTransmissao(listaArquivos, streamURL) {
 
 (async () => {
   try {
-    console.log('🚀 Iniciando processo de preparação...');
+    console.log('🚀 Preparando vídeos para live...');
 
     const arquivos = [
       { campo: 'video_principal', saida: 'video_principal.mp4' },
@@ -163,20 +163,27 @@ async function iniciarTransmissao(listaArquivos, streamURL) {
     await aplicarOverlayParte('parte1_bruta.mp4', 'logo.png', 'rodape.png', 'parte1.mp4');
     await aplicarOverlayParte('parte2_bruta.mp4', 'logo.png', 'rodape.png', 'parte2.mp4');
 
-    console.log('✅ Partes 1 e 2 prontas! Iniciando live...');
+    console.log('✅ Vídeos prontos! Criando sequência da live...');
 
-    const ordemLive = ['parte1.mp4'];
-    if (fs.existsSync('video_inicial.mp4')) ordemLive.push('video_inicial.mp4');
-    if (fs.existsSync('video_miraplay.mp4')) ordemLive.push('video_miraplay.mp4');
+    const sequencia = ['parte1.mp4'];
+
+    if (fs.existsSync('video_inicial.mp4')) sequencia.push('video_inicial.mp4');
+    if (fs.existsSync('video_miraplay.mp4')) sequencia.push('video_miraplay.mp4');
+
     const extras = fs.readdirSync('.').filter(f => /^extra\d+\.mp4$/.test(f)).sort();
-    ordemLive.push(...extras);
-    if (fs.existsSync('video_inicial.mp4')) ordemLive.push('video_inicial.mp4');
-    ordemLive.push('parte2.mp4');
-    if (fs.existsSync('video_final.mp4')) ordemLive.push('video_final.mp4');
+    sequencia.push(...extras);
 
-    await iniciarTransmissao(ordemLive, input.stream_url);
+    if (fs.existsSync('video_inicial.mp4')) sequencia.push('video_inicial.mp4');
+    sequencia.push('parte2.mp4');
+    if (fs.existsSync('video_final.mp4')) sequencia.push('video_final.mp4');
+
+    console.log('📜 Sequência criada:');
+    console.log(sequencia.map(s => ' - ' + s).join('\n'));
+
+    await iniciarTransmissaoEmTempoReal(sequencia, input.stream_url);
 
     console.log('🎉 Live finalizada com sucesso!');
+    limparTemporarios();
 
   } catch (err) {
     console.error('\n❌ ERRO DETECTADO:', err.message);
