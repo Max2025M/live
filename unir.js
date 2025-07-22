@@ -131,19 +131,27 @@ function transmitirParaFacebook(streamUrl) {
       '-c:v', 'libx264',
       '-preset', 'veryfast',
       '-tune', 'zerolatency',
-      '-b:v', '2500k',
-      '-maxrate', '2500k',
-      '-bufsize', '5000k',
+      '-b:v', '1500k',
+      '-maxrate', '1500k',
+      '-bufsize', '3000k',
       '-c:a', 'aac',
       '-b:a', '128k',
       '-f', 'flv',
       streamUrl
     ]);
 
+    // Timeout para matar processo após 10 minutos (600000ms)
+    const timeout = setTimeout(() => {
+      console.error('❌ Timeout de 10 minutos atingido, finalizando transmissão...');
+      ffmpeg.kill('SIGINT');
+      reject(new Error('❌ Transmissão abortada por timeout de 10 minutos'));
+    }, 600000);
+
     ffmpeg.stdout.on('data', data => process.stdout.write(`[ffmpeg] ${data}`));
     ffmpeg.stderr.on('data', data => process.stderr.write(`[ffmpeg] ${data}`));
 
     ffmpeg.on('close', code => {
+      clearTimeout(timeout);
       if (code === 0) {
         console.log('✅ Transmissão finalizada com sucesso!');
         resolve();
