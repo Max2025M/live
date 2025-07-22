@@ -14,51 +14,48 @@ function registrarTemporario(caminho) {
 }
 
 function limparTemporarios() {
+  console.log('\n🧹 Limpando arquivos temporários...');
   for (const arq of arquivosTemporarios) {
     if (fs.existsSync(arq)) {
       fs.unlinkSync(arq);
-      console.log(`🧹 Arquivo temporário removido: ${arq}`);
+      console.log(`🗑️ Removido: ${arq}`);
     }
   }
 }
 
-function executarFFmpeg(args, options = {}) {
+function executarFFmpeg(args) {
   return new Promise((resolve, reject) => {
-    console.log(`🛠️ Executando FFmpeg:\nffmpeg ${args.join(' ')}`);
-    const ffmpeg = spawn('ffmpeg', ['-y', ...args], options);
-    ffmpeg.stdout.on('data', data => process.stdout.write(data.toString()));
-    ffmpeg.stderr.on('data', data => process.stderr.write(data.toString()));
-    ffmpeg.on('close', code => {
-      if (code === 0) resolve();
-      else reject(new Error(`❌ FFmpeg falhou com código ${code}`));
-    });
+    console.log(`\n🛠️ FFmpeg:\nffmpeg ${args.join(' ')}`);
+    const proc = spawn('ffmpeg', ['-y', ...args]);
+    proc.stderr.on('data', d => process.stderr.write(d.toString()));
+    proc.on('close', code => code === 0 ? resolve() : reject(new Error(`FFmpeg falhou: ${code}`)));
   });
 }
 
-async function baixarArquivo(remoto, destino) {
+async function baixarArquivo(remoto, destino, reencode = true) {
   return new Promise((resolve, reject) => {
-    console.log(`⬇️ Baixando de: ${remoto}`);
+    console.log(`⬇️ Baixando: ${remoto}`);
     const rclone = spawn('rclone', ['copy', `meudrive:${remoto}`, '.', '--config', keyFile]);
-    rclone.stderr.on('data', data => process.stderr.write(data.toString()));
+    rclone.stderr.on('data', d => process.stderr.write(d.toString()));
     rclone.on('close', async code => {
       if (code !== 0) return reject(new Error(`Erro ao baixar ${remoto}`));
       const base = path.basename(remoto);
       if (!fs.existsSync(base)) return reject(new Error(`Arquivo não encontrado: ${base}`));
       fs.renameSync(base, destino);
-      console.log(`✅ Arquivo baixado: ${destino}`);
-
-      const temp = destino.replace(/(\.[^.]+)$/, '_temp$1');
-      await reencode(destino, temp);
-      fs.renameSync(temp, destino);
-
+      console.log(`✅ Baixado: ${destino}`);
+      if (reencode) {
+        const temp = destino.replace(/(\.[^.]+)$/, '_temp$1');
+        await reencodeVideo(destino, temp);
+        fs.renameSync(temp, destino);
+      }
       registrarTemporario(destino);
       resolve();
     });
   });
 }
 
-async function reencode(entrada, saida) {
-  console.log(`🎞️ Recodificando: ${entrada} → ${saida}`);
+async function reencodeVideo(entrada, saida) {
+  console.log(`🎞️ Reencode: ${entrada} → ${saida}`);
   await executarFFmpeg([
     '-i', entrada,
     '-c:v', 'libx264',
@@ -75,155 +72,110 @@ async function reencode(entrada, saida) {
 }
 
 async function obterDuracao(arquivo) {
-  console.log(`⏱️ Calculando duração de: ${arquivo}`);
   const { stdout } = await exec(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${arquivo}"`);
   return parseFloat(stdout.trim());
 }
 
-async function cortarVideo(entrada, inicio, fim, saida) {
-  console.log(`✂️ Cortando vídeo: ${entrada} de ${inicio}s até ${fim}s → ${saida}`);
+async function cortarVideo(inputPath, inicio, duracao, output) {
+  console.log(`✂️ Cortando: ${inputPath} início: ${inicio}s duração: ${duracao}s`);
   await executarFFmpeg([
+    '-i', inputPath,
     '-ss', inicio.toString(),
-    '-to', fim.toString(),
-    '-i', entrada,
-    '-c:v', 'libx264',
-    '-c:a', 'aac',
-    '-b:a', '128k',
-    '-shortest',
-    saida
+    '-t', duracao.toString(),
+    '-c', 'copy',
+    output
   ]);
-  registrarTemporario(saida);
+  registrarTemporario(output);
 }
 
-async function inserirLogo(videoInput, logo, saida) {
-  console.log(`🏷️ Inserindo logo em: ${videoInput}`);
+async function aplicarOverlayParte(parte, logo, rodape, output) {
+  const filtros = [
+    `[0:v][1:v] overlay=W-w-10:10 [logo]`,
+    `[logo][2:v] overlay=0:H-h:enable='between(t,240,250)'`
+  ];
+  console.log(`🖼️ Aplicando overlay: ${parte} + logo + rodapé → ${output}`);
   await executarFFmpeg([
-    '-i', videoInput,
-    '-i', logo,
-    '-filter_complex', '[0:v][1:v] overlay=W-w-20:20',
-    '-map', '0:v',
-    '-map', '0:a?',
+    '-i', parte,
+    '-loop', '1', '-i', logo,
+    '-loop', '1', '-i', rodape,
+    '-filter_complex', filtros.join('; '),
     '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-crf', '23',
-    '-c:a', 'aac',
-    '-shortest',
-    saida
+    '-c:a', 'copy',
+    '-t', (await obterDuracao(parte)).toString(),
+    output
   ]);
-  registrarTemporario(saida);
+  registrarTemporario(output);
 }
 
-async function transmitirSequencia() {
+async function iniciarTransmissao(listaArquivos, streamURL) {
+  const playlist = 'playlist.txt';
+  fs.writeFileSync(playlist, listaArquivos.map(f => `file '${f}'`).join('\n'));
+  registrarTemporario(playlist);
+
+  console.log(`📡 Iniciando transmissão para: ${streamURL}`);
+  await executarFFmpeg([
+    '-f', 'concat',
+    '-safe', '0',
+    '-i', playlist,
+    '-c:v', 'copy',
+    '-c:a', 'aac',
+    '-f', 'flv',
+    streamURL
+  ]);
+}
+
+(async () => {
   try {
-    console.log('🚦 Iniciando preparação da live...');
+    console.log('🚀 Iniciando processo de preparação...');
 
-    const videoPrincipal = 'video_principal.mp4';
-    const logo = 'logo.mp4';
-    const rodape = 'rodape.mp4';
-
-    await baixarArquivo(input.video_principal, videoPrincipal);
-    await baixarArquivo(input.logo_id, logo);
-    await baixarArquivo(input.rodape_id, rodape);
-
-    const duracao = await obterDuracao(videoPrincipal);
-    const metade = duracao / 2;
-
-    const parte1 = 'parte1.mp4';
-    const parte2 = 'parte2.mp4';
-
-    await cortarVideo(videoPrincipal, 0, metade, parte1);
-    await cortarVideo(videoPrincipal, metade, duracao, parte2);
-
-    const parte1Logo = 'parte1_logo.mp4';
-    await inserirLogo(parte1, logo, parte1Logo);
-
-    async function baixarEPreparar(caminho, nomeLocal) {
-      if (!caminho) return null;
-      await baixarArquivo(caminho, nomeLocal);
-      const reencoded = 'reenc_' + nomeLocal;
-      await reencode(nomeLocal, reencoded);
-      return reencoded;
-    }
-
-    const videoInicial = await baixarEPreparar(input.video_inicial, 'video_inicial.mp4');
-    const videoMiraplay = await baixarEPreparar(input.video_miraplay, 'video_miraplay.mp4');
-    const videoFinal = await baixarEPreparar(input.video_final, 'video_final.mp4');
-
-    const extras = [];
-    for (let i = 0; i < input.videos_extras.length; i++) {
-      const nomeExtra = `extra_${i}.mp4`;
-      const reencExtra = await baixarEPreparar(input.videos_extras[i], nomeExtra);
-      if (reencExtra) extras.push(reencExtra);
-    }
-
-    const inputs = [
-      { path: parte1Logo, withRodape: false },
-      { path: videoInicial, withRodape: true },
-      { path: videoMiraplay, withRodape: true },
-      ...extras.map(p => ({ path: p, withRodape: true })),
-      { path: videoInicial, withRodape: true },
-      { path: parte2, withRodape: true },
-      { path: videoFinal, withRodape: true }
-    ].filter(Boolean);
-
-    const ffmpegArgs = [];
-    const filterParts = [];
-    const videoLabels = [];
-
-    inputs.forEach((input, i) => {
-      ffmpegArgs.push('-i', input.path);
-    });
-
-    ffmpegArgs.push('-i', logo);     // logo = penúltimo input
-    ffmpegArgs.push('-i', rodape);   // rodape = último input
-
-    const logoIdx = inputs.length;
-    const rodapeIdx = inputs.length + 1;
-
-    inputs.forEach((input, i) => {
-      filterParts.push(`[${i}:v]scale=1280:720[vs${i}]`);
-      if (input.withRodape) {
-        filterParts.push(`[${rodapeIdx}:v]scale=426:240[rod${i}]`);
-        filterParts.push(`[vs${i}][rod${i}]overlay=W-w-50:H-h-10[tmp${i}]`);
-        filterParts.push(`[tmp${i}][${logoIdx}:v]overlay=W-w-20:20[v${i}]`);
-      } else {
-        filterParts.push(`[vs${i}][${logoIdx}:v]overlay=W-w-20:20[v${i}]`);
-      }
-      videoLabels.push(`[v${i}]`);
-    });
-
-    // CONCATENAR VÍDEO E ÁUDIO JUNTOS (a=1)
-    const filter = filterParts.join('; ') + `; ${videoLabels.join('')}concat=n=${videoLabels.length}:v=1:a=1[outv][outa]`;
-
-    const args = [
-      '-hide_banner',
-      '-loglevel', 'info',
-      ...ffmpegArgs,
-      '-filter_complex', filter,
-      '-map', '[outv]',
-      '-map', '[outa]',
-      '-c:v', 'libx264',
-      '-preset', 'veryfast',
-      '-crf', '23',
-      '-c:a', 'aac',
-      '-b:a', '128k',
-      '-f', 'flv',
-      input.stream_url
+    const arquivos = [
+      { campo: 'video_principal', saida: 'video_principal.mp4' },
+      { campo: 'video_inicial', saida: 'video_inicial.mp4' },
+      { campo: 'video_miraplay', saida: 'video_miraplay.mp4' },
+      { campo: 'video_final', saida: 'video_final.mp4' },
+      { campo: 'logo_id', saida: 'logo.png', reencode: false },
+      { campo: 'rodape_id', saida: 'rodape.png', reencode: false }
     ];
 
-    console.log('🚀 Transmitindo para:', input.stream_url);
-    const ffmpegProc = spawn('ffmpeg', args, { stdio: 'inherit' });
+    for (const arq of arquivos) {
+      const origem = input[arq.campo];
+      if (origem) await baixarArquivo(origem, arq.saida, arq.reencode !== false);
+    }
 
-    ffmpegProc.on('exit', code => {
-      console.log(code === 0 ? '✅ Live finalizada com sucesso.' : `❌ Erro na live. Código: ${code}`);
-      limparTemporarios();
-    });
+    for (let i = 0; i < input.videos_extras.length; i++) {
+      await baixarArquivo(input.videos_extras[i], `extra${i}.mp4`);
+    }
+
+    // Cortar principal
+    const duracao = await obterDuracao('video_principal.mp4');
+    const metade = duracao / 2;
+    await cortarVideo('video_principal.mp4', 0, metade, 'parte1_bruta.mp4');
+    await cortarVideo('video_principal.mp4', metade, metade, 'parte2_bruta.mp4');
+
+    // Aplicar overlays
+    await aplicarOverlayParte('parte1_bruta.mp4', 'logo.png', 'rodape.png', 'parte1.mp4');
+    await aplicarOverlayParte('parte2_bruta.mp4', 'logo.png', 'rodape.png', 'parte2.mp4');
+
+    console.log('✅ Partes 1 e 2 prontas! Iniciando live...');
+
+    // Montar ordem da live
+    const ordemLive = ['parte1.mp4'];
+    if (fs.existsSync('video_inicial.mp4')) ordemLive.push('video_inicial.mp4');
+    if (fs.existsSync('video_miraplay.mp4')) ordemLive.push('video_miraplay.mp4');
+    const extras = fs.readdirSync('.').filter(f => /^extra\d+\.mp4$/.test(f));
+    ordemLive.push(...extras);
+    if (fs.existsSync('video_inicial.mp4')) ordemLive.push('video_inicial.mp4');
+    ordemLive.push('parte2.mp4');
+    if (fs.existsSync('video_final.mp4')) ordemLive.push('video_final.mp4');
+
+    // Iniciar transmissão ao vivo no Facebook
+    await iniciarTransmissao(ordemLive, input.stream_url);
+
+    console.log('🎉 Live finalizada com sucesso!');
 
   } catch (err) {
-    console.error('❌ Erro:', err.message || err);
+    console.error('\n❌ ERRO DETECTADO:', err.message);
     limparTemporarios();
     process.exit(1);
   }
-}
-
-transmitirSequencia();
+})();
