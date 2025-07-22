@@ -44,15 +44,7 @@ async function reencode(input, output) {
   registrarTemporario(output);
 }
 
-async function cortarVideo(input, out1, out2, meio) {
-  console.log(`✂️ Cortando vídeo ${input}...`);
-  await executarFFmpeg(['-i', input, '-t', meio.toString(), '-c', 'copy', out1]);
-  await executarFFmpeg(['-i', input, '-ss', meio.toString(), '-c', 'copy', out2]);
-  registrarTemporario(out1);
-  registrarTemporario(out2);
-}
-
-async function baixarArquivo(remoto, destino) {
+async function baixarEReencodar(remoto, destino) {
   return new Promise((resolve, reject) => {
     const rclone = spawn('rclone', ['copy', `meudrive:${remoto}`, '.', '--config', keyFile]);
     rclone.stderr.on('data', data => process.stderr.write(data));
@@ -61,15 +53,14 @@ async function baixarArquivo(remoto, destino) {
         const nome = path.basename(remoto);
         if (!fs.existsSync(nome)) return reject(new Error(`Arquivo não encontrado: ${nome}`));
         fs.renameSync(nome, destino);
-        registrarTemporario(destino);
 
         if (destino.toLowerCase().endsWith('.mp4')) {
           const temp = destino.replace(/(\.[^.]+)$/, '_temp$1');
           await reencode(destino, temp);
           fs.renameSync(temp, destino);
-          console.log(`📥 Vídeo reencodado: ${destino}`);
         }
 
+        registrarTemporario(destino);
         resolve();
       } else {
         reject(new Error(`Erro ao baixar ${remoto}`));
@@ -78,14 +69,23 @@ async function baixarArquivo(remoto, destino) {
   });
 }
 
-async function inserirRodape(principal, rodape, logo, saida, inicioRodape) {
+async function cortarVideo(input, out1, out2, meio) {
+  console.log(`✂️ Cortando vídeo ${input} ao meio...`);
+  await executarFFmpeg(['-i', input, '-t', meio.toString(), '-c', 'copy', out1]);
+  await executarFFmpeg(['-i', input, '-ss', meio.toString(), '-c', 'copy', out2]);
+  registrarTemporario(out1);
+  registrarTemporario(out2);
+}
+
+async function inserirRodapeComLogo(videoInput, rodape, logo, saida) {
+  const inicioRodape = 4 * 60; // minuto 4
   const duracaoRodape = await obterDuracao(rodape);
   const fimRodape = inicioRodape + duracaoRodape;
 
   await executarFFmpeg([
     '-fflags', '+genpts',
     '-avoid_negative_ts', 'make_zero',
-    '-i', principal,
+    '-i', videoInput,
     '-i', rodape,
     '-i', logo,
     '-filter_complex',
@@ -168,40 +168,32 @@ async function main() {
   } = input;
 
   // Baixar e preparar arquivos
-  await baixarArquivo(video_principal, 'principal.mp4');
-  await baixarArquivo(rodape_id, 'rodape.mp4');
-  await baixarArquivo(logo_id, 'logo.png');
-
-  const duracaoPrincipal = await obterDuracao('principal.mp4');
-  const meio = Math.floor(duracaoPrincipal / 2);
-
-  await cortarVideo('principal.mp4', 'parte1.mp4', 'parte2.mp4', meio);
-  await inserirRodape('parte2.mp4', 'rodape.mp4', 'logo.png', 'parte2_final.mp4', 0);
-
-  await executarFFmpeg([
-    '-i', 'parte1.mp4',
-    '-i', 'logo.png',
-    '-filter_complex', '[0:v][1:v]overlay=W-w-20:20[out]',
-    '-map', '[out]',
-    '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-crf', '23',
-    '-an',
-    'parte1_final.mp4'
-  ]);
-  registrarTemporario('parte1_final.mp4');
-
-  await baixarArquivo(video_inicial, 'video_inicial.mp4');
-  await baixarArquivo(video_miraplay, 'video_miraplay.mp4');
-  await baixarArquivo(video_final, 'video_final.mp4');
+  await baixarEReencodar(video_principal, 'principal.mp4');
+  await baixarEReencodar(rodape_id, 'rodape.mp4');
+  await baixarEReencodar(logo_id, 'logo.png');
+  await baixarEReencodar(video_inicial, 'video_inicial.mp4');
+  await baixarEReencodar(video_miraplay, 'video_miraplay.mp4');
+  await baixarEReencodar(video_final, 'video_final.mp4');
 
   const extras = [];
   for (let i = 0; i < videos_extras.length; i++) {
     const nome = `extra${i}.mp4`;
-    await baixarArquivo(videos_extras[i], nome);
+    await baixarEReencodar(videos_extras[i], nome);
     extras.push(nome);
   }
 
+  // Cortar vídeo principal em 2
+  const duracaoPrincipal = await obterDuracao('principal.mp4');
+  const meio = Math.floor(duracaoPrincipal / 2);
+  await cortarVideo('principal.mp4', 'parte1.mp4', 'parte2.mp4', meio);
+
+  // Aplicar rodapé e logo na parte 1
+  await inserirRodapeComLogo('parte1.mp4', 'rodape.mp4', 'logo.png', 'parte1_final.mp4');
+
+  // Aplicar rodapé e logo na parte 2
+  await inserirRodapeComLogo('parte2.mp4', 'rodape.mp4', 'logo.png', 'parte2_final.mp4');
+
+  // Montar vídeo final
   const ordem = [
     'parte1_final.mp4',
     'video_inicial.mp4',
@@ -224,6 +216,7 @@ async function main() {
   ]);
   console.log('✅ Vídeo final criado: video_final_completo.mp4');
 
+  // Transmitir
   const urlCorrigida = corrigirStreamUrl(stream_url);
   await transmitirParaFacebook(urlCorrigida);
 }
