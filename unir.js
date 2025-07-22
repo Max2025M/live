@@ -1,5 +1,3 @@
-// live_stream.js
-
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -171,7 +169,6 @@ async function transmitirSequencia() {
     const ffmpegArgs = [];
     const filterParts = [];
     const videoLabels = [];
-    const mapArgs = [];
 
     inputs.forEach((input, i) => {
       ffmpegArgs.push('-i', input.path);
@@ -193,13 +190,9 @@ async function transmitirSequencia() {
         filterParts.push(`[vs${i}][${logoIdx}:v]overlay=W-w-20:20[v${i}]`);
       }
       videoLabels.push(`[v${i}]`);
-
-      // Mapeia vídeo e áudio (se existir)
-      mapArgs.push('-map', `${i}:v`);
-      mapArgs.push('-map', `${i}:a?`);
     });
 
-    const filter = filterParts.join('; ') + `; ${videoLabels.join('')}concat=n=${inputs.length}:v=1:a=1[outv][outa]`;
+    const filter = filterParts.join('; ') + `; ${videoLabels.join('')}concat=n=${videoLabels.length}:v=1:a=0[outv]`;
 
     const args = [
       '-hide_banner',
@@ -207,7 +200,7 @@ async function transmitirSequencia() {
       ...ffmpegArgs,
       '-filter_complex', filter,
       '-map', '[outv]',
-      '-map', '[outa]',
+      ...inputs.map((_, i) => ['-map', `${i}:a?`]).flat(),
       '-c:v', 'libx264',
       '-preset', 'veryfast',
       '-crf', '23',
