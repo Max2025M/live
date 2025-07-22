@@ -58,8 +58,31 @@ async function cortarVideo(video, parte1, parte2) {
   const duracao = await obterDuracao(video);
   const meio = duracao / 2;
 
-  await executarFFmpeg(['-i', video, '-t', meio.toString(), '-c', 'copy', parte1]);
-  await executarFFmpeg(['-i', video, '-ss', meio.toString(), '-c', 'copy', parte2]);
+  // Cortar parte1
+  await executarFFmpeg([
+    '-fflags', '+genpts',
+    '-i', video,
+    '-t', meio.toString(),
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
+    '-c:a', 'aac', '-b:a', '128k',
+    '-vf', 'scale=1280:720,setdar=16/9',
+    '-avoid_negative_ts', 'make_zero',
+    '-vsync', '1',
+    parte1
+  ]);
+
+  // Cortar parte2
+  await executarFFmpeg([
+    '-fflags', '+genpts',
+    '-ss', meio.toString(),
+    '-i', video,
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
+    '-c:a', 'aac', '-b:a', '128k',
+    '-vf', 'scale=1280:720,setdar=16/9',
+    '-avoid_negative_ts', 'make_zero',
+    '-vsync', '1',
+    parte2
+  ]);
 
   registrarTemporario(parte1);
   registrarTemporario(parte2);
@@ -67,6 +90,7 @@ async function cortarVideo(video, parte1, parte2) {
 
 async function reencode(input, output) {
   await executarFFmpeg([
+    '-fflags', '+genpts',
     '-i', input,
     '-vf', 'scale=1280:720,setdar=16/9',
     '-c:v', 'libx264',
@@ -74,8 +98,11 @@ async function reencode(input, output) {
     '-crf', '23',
     '-c:a', 'aac',
     '-b:a', '128k',
+    '-avoid_negative_ts', 'make_zero',
+    '-vsync', '1',
     output
   ]);
+  registrarTemporario(output);
 }
 
 async function inserirRodapeELogoSempreVisivel(videoInput, rodape, logo, saida) {
@@ -103,10 +130,12 @@ async function inserirRodapeELogoSempreVisivel(videoInput, rodape, logo, saida) 
     [pre_logo][cut_logo][post_logo]concat=n=3:v=1:a=0[outv]
     `,
     '-map', '[outv]',
+    '-map', '0:a?',
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '23',
-    '-an',
+    '-c:a', 'aac',
+    '-b:a', '128k',
     saida
   ]);
   registrarTemporario(saida);
@@ -114,8 +143,23 @@ async function inserirRodapeELogoSempreVisivel(videoInput, rodape, logo, saida) 
 
 async function unirVideos(lista, saidaFinal) {
   const listFile = 'lista.txt';
+  // Para garantir concatenação sem erro, garantimos que todos vídeos sejam reencodados antes
+  // e usamos -c:v libx264 e -c:a aac (não copy).
   fs.writeFileSync(listFile, lista.map(v => `file '${v}'`).join('\n'));
-  await executarFFmpeg(['-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', saidaFinal]);
+  await executarFFmpeg([
+    '-f', 'concat',
+    '-safe', '0',
+    '-i', listFile,
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-crf', '23',
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    '-avoid_negative_ts', 'make_zero',
+    '-vsync', '1',
+    saidaFinal
+  ]);
+  registrarTemporario(saidaFinal);
 }
 
 async function iniciarLive(streamUrl, arquivo) {
@@ -146,37 +190,49 @@ async function iniciarLive(streamUrl, arquivo) {
     stream_url
   } = input;
 
-  // Baixar e preparar partes principais
+  // Baixar vídeo principal, rodapé e logo
   await baixarVideo(video_principal, 'principal.mp4');
   await cortarVideo('principal.mp4', 'parte1.mp4', 'parte2.mp4');
   await baixarVideo(rodape_id, 'rodape.mp4');
   await baixarVideo(logo_id, 'logo.png');
 
+  // Inserir rodapé e logo sempre visível em parte 1 e parte 2
   await inserirRodapeELogoSempreVisivel('parte1.mp4', 'rodape.mp4', 'logo.png', 'parte1_final.mp4');
   await inserirRodapeELogoSempreVisivel('parte2.mp4', 'rodape.mp4', 'logo.png', 'parte2_final.mp4');
 
-  // Baixar outros vídeos
-  if (video_inicial) await baixarVideo(video_inicial, 'video_inicial.mp4');
-  if (video_miraplay) await baixarVideo(video_miraplay, 'video_miraplay.mp4');
-  if (video_final) await baixarVideo(video_final, 'video_final.mp4');
+  // Baixar demais vídeos e reencodar para garantir padrão idêntico
+  if (video_inicial) {
+    await baixarVideo(video_inicial, 'video_inicial.mp4');
+    await reencode('video_inicial.mp4', 'video_inicial_reenc.mp4');
+  }
+  if (video_miraplay) {
+    await baixarVideo(video_miraplay, 'video_miraplay.mp4');
+    await reencode('video_miraplay.mp4', 'video_miraplay_reenc.mp4');
+  }
+  if (video_final) {
+    await baixarVideo(video_final, 'video_final.mp4');
+    await reencode('video_final.mp4', 'video_final_reenc.mp4');
+  }
 
+  // Baixar e reencodar vídeos extras
   const extrasPaths = [];
   for (let i = 0; i < videos_extras.length; i++) {
     const nome = `extra_${i}.mp4`;
     await baixarVideo(videos_extras[i], nome);
-    extrasPaths.push(nome);
+    await reencode(nome, `extra_${i}_reenc.mp4`);
+    extrasPaths.push(`extra_${i}_reenc.mp4`);
   }
 
-  // Montar ordem exata
+  // Montar ordem final, usando vídeos reencodados onde aplicável
   const ordemFinal = [
     'parte1_final.mp4',
-    'video_inicial.mp4',
-    'video_miraplay.mp4',
+    'video_inicial_reenc.mp4',
+    'video_miraplay_reenc.mp4',
     ...extrasPaths,
-    'video_inicial.mp4',
+    'video_inicial_reenc.mp4',
     'parte2_final.mp4',
-    'video_final.mp4'
-  ].filter(Boolean);
+    'video_final_reenc.mp4'
+  ].filter(fs.existsSync);
 
   await unirVideos(ordemFinal, 'video_final_completo.mp4');
   console.log('✅ Vídeo final montado com sucesso.');
@@ -184,11 +240,12 @@ async function iniciarLive(streamUrl, arquivo) {
   await iniciarLive(stream_url, 'video_final_completo.mp4');
   console.log('📡 Transmissão iniciada.');
 
+  // Limpar arquivos temporários
   arquivosTemporarios.forEach(arquivo => {
     try {
       fs.unlinkSync(arquivo);
     } catch (e) {
-      console.warn(`⚠️ Erro ao remover ${arquivo}`);
+      console.warn(`⚠️ Erro ao remover ${arquivo}: ${e.message}`);
     }
   });
 })();
