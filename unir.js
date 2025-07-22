@@ -111,12 +111,8 @@ async function aplicarOverlayParte(parte, logo, rodape, output) {
   registrarTemporario(output);
 }
 
-async function iniciarTransmissaoEmTempoReal(listaArquivos, streamURL) {
-  const playlistPath = 'sequencia_da_transmissao.txt';
-  fs.writeFileSync(playlistPath, listaArquivos.map(f => `file '${f}'`).join('\n'));
-  registrarTemporario(playlistPath);
-
-  console.log(`📡 Enviando vídeos em tempo real para: ${streamURL}`);
+async function iniciarTransmissaoEmTempoReal(playlistPath, streamURL) {
+  console.log(`📡 Transmitindo para: ${streamURL}`);
   await executarFFmpeg([
     '-f', 'concat',
     '-safe', '0',
@@ -135,7 +131,7 @@ async function iniciarTransmissaoEmTempoReal(listaArquivos, streamURL) {
 
 (async () => {
   try {
-    console.log('🚀 Preparando vídeos para live...');
+    console.log('🚀 Preparando transmissão...');
 
     const arquivos = [
       { campo: 'video_principal', saida: 'video_principal.mp4' },
@@ -157,13 +153,14 @@ async function iniciarTransmissaoEmTempoReal(listaArquivos, streamURL) {
 
     const duracao = await obterDuracao('video_principal.mp4');
     const metade = duracao / 2;
+
     await cortarVideo('video_principal.mp4', 0, metade, 'parte1_bruta.mp4');
     await cortarVideo('video_principal.mp4', metade, metade, 'parte2_bruta.mp4');
 
     await aplicarOverlayParte('parte1_bruta.mp4', 'logo.png', 'rodape.png', 'parte1.mp4');
     await aplicarOverlayParte('parte2_bruta.mp4', 'logo.png', 'rodape.png', 'parte2.mp4');
 
-    console.log('✅ Vídeos prontos! Criando sequência da live...');
+    console.log('✅ Criando sequência da live...');
 
     const sequencia = ['parte1.mp4'];
 
@@ -177,12 +174,16 @@ async function iniciarTransmissaoEmTempoReal(listaArquivos, streamURL) {
     sequencia.push('parte2.mp4');
     if (fs.existsSync('video_final.mp4')) sequencia.push('video_final.mp4');
 
-    console.log('📜 Sequência criada:');
+    const playlistPath = 'sequencia_da_transmissao.txt';
+    fs.writeFileSync(playlistPath, sequencia.map(f => `file '${f}'`).join('\n'));
+    registrarTemporario(playlistPath);
+
+    console.log(`📜 Sequência salva em "${playlistPath}":`);
     console.log(sequencia.map(s => ' - ' + s).join('\n'));
 
-    await iniciarTransmissaoEmTempoReal(sequencia, input.stream_url);
+    await iniciarTransmissaoEmTempoReal(playlistPath, input.stream_url);
 
-    console.log('🎉 Live finalizada com sucesso!');
+    console.log('✅ Transmissão concluída com sucesso!');
     limparTemporarios();
 
   } catch (err) {
