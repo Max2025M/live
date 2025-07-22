@@ -17,15 +17,19 @@ function registrarTemporario(caminho) {
 
 function limparTemporarios() {
   for (const arq of arquivosTemporarios) {
-    if (fs.existsSync(arq)) fs.unlinkSync(arq);
+    if (fs.existsSync(arq)) {
+      fs.unlinkSync(arq);
+      console.log(`🧹 Arquivo temporário removido: ${arq}`);
+    }
   }
 }
 
 function executarFFmpeg(args, options = {}) {
   return new Promise((resolve, reject) => {
+    console.log(`🛠️ Executando FFmpeg:\nffmpeg ${args.join(' ')}`);
     const ffmpeg = spawn('ffmpeg', ['-y', ...args], options);
-    ffmpeg.stdout.on('data', data => process.stdout.write(data));
-    ffmpeg.stderr.on('data', data => process.stderr.write(data));
+    ffmpeg.stdout.on('data', data => process.stdout.write(data.toString()));
+    ffmpeg.stderr.on('data', data => process.stderr.write(data.toString()));
     ffmpeg.on('close', code => {
       if (code === 0) resolve();
       else reject(new Error(`❌ FFmpeg falhou com código ${code}`));
@@ -35,12 +39,15 @@ function executarFFmpeg(args, options = {}) {
 
 async function baixarArquivo(remoto, destino) {
   return new Promise((resolve, reject) => {
+    console.log(`⬇️ Baixando de: ${remoto}`);
     const rclone = spawn('rclone', ['copy', `meudrive:${remoto}`, '.', '--config', keyFile]);
-    rclone.stderr.on('data', data => process.stderr.write(data));
+    rclone.stderr.on('data', data => process.stderr.write(data.toString()));
     rclone.on('close', async code => {
       if (code !== 0) return reject(new Error(`Erro ao baixar ${remoto}`));
-      if (!fs.existsSync(path.basename(remoto))) return reject(new Error(`Arquivo não encontrado: ${remoto}`));
-      fs.renameSync(path.basename(remoto), destino);
+      const base = path.basename(remoto);
+      if (!fs.existsSync(base)) return reject(new Error(`Arquivo não encontrado: ${base}`));
+      fs.renameSync(base, destino);
+      console.log(`✅ Arquivo baixado: ${destino}`);
 
       const temp = destino.replace(/(\.[^.]+)$/, '_temp$1');
       await reencode(destino, temp);
@@ -53,6 +60,7 @@ async function baixarArquivo(remoto, destino) {
 }
 
 async function reencode(entrada, saida) {
+  console.log(`🎞️ Recodificando: ${entrada} → ${saida}`);
   await executarFFmpeg([
     '-i', entrada,
     '-c:v', 'libx264',
@@ -69,11 +77,13 @@ async function reencode(entrada, saida) {
 }
 
 async function obterDuracao(arquivo) {
+  console.log(`⏱️ Calculando duração de: ${arquivo}`);
   const { stdout } = await exec(`ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${arquivo}"`);
   return parseFloat(stdout.trim());
 }
 
 async function cortarVideo(entrada, inicio, fim, saida) {
+  console.log(`✂️ Cortando vídeo: ${entrada} de ${inicio}s até ${fim}s → ${saida}`);
   await executarFFmpeg([
     '-ss', inicio.toString(),
     '-to', fim.toString(),
@@ -88,10 +98,13 @@ async function cortarVideo(entrada, inicio, fim, saida) {
 }
 
 async function inserirLogo(videoInput, logo, saida) {
+  console.log(`🏷️ Inserindo logo em: ${videoInput}`);
   await executarFFmpeg([
     '-i', videoInput,
     '-i', logo,
     '-filter_complex', '[0:v][1:v] overlay=W-w-20:20',
+    '-map', '0:v',
+    '-map', '0:a?',
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '23',
@@ -104,7 +117,8 @@ async function inserirLogo(videoInput, logo, saida) {
 
 async function transmitirSequencia() {
   try {
-    console.log('⬇️ Baixando vídeo principal, logo e rodapé...');
+    console.log('🚦 Iniciando preparação da live...');
+
     const videoPrincipal = 'video_principal.mp4';
     const logo = 'logo.mp4';
     const rodape = 'rodape.mp4';
@@ -155,45 +169,50 @@ async function transmitirSequencia() {
     ].filter(Boolean);
 
     const ffmpegArgs = [];
+    const filterParts = [];
+    const videoLabels = [];
+    const mapArgs = [];
 
-    inputs.forEach(input => ffmpegArgs.push('-i', input.path));
-    ffmpegArgs.push('-i', logo);
-    ffmpegArgs.push('-i', rodape);
+    inputs.forEach((input, i) => {
+      ffmpegArgs.push('-i', input.path);
+    });
+
+    ffmpegArgs.push('-i', logo);     // logo = penúltimo input
+    ffmpegArgs.push('-i', rodape);   // rodape = último input
 
     const logoIdx = inputs.length;
     const rodapeIdx = inputs.length + 1;
 
-    let filter = '';
-    let videoLabels = [];
-
     inputs.forEach((input, i) => {
-      filter += `[${i}:v]scale=1280:720[vs${i}]; `;
+      filterParts.push(`[${i}:v]scale=1280:720[vs${i}]`);
       if (input.withRodape) {
-        filter += `[${rodapeIdx}:v]scale=426:240[rod${i}]; `;
-        filter += `[vs${i}][rod${i}]overlay=W-w-50:H-h-10[tmp${i}]; `;
-        filter += `[tmp${i}][${logoIdx}:v]overlay=W-w-20:20[v${i}]; `;
+        filterParts.push(`[${rodapeIdx}:v]scale=426:240[rod${i}]`);
+        filterParts.push(`[vs${i}][rod${i}]overlay=W-w-50:H-h-10[tmp${i}]`);
+        filterParts.push(`[tmp${i}][${logoIdx}:v]overlay=W-w-20:20[v${i}]`);
       } else {
-        filter += `[vs${i}][${logoIdx}:v]overlay=W-w-20:20[v${i}]; `;
+        filterParts.push(`[vs${i}][${logoIdx}:v]overlay=W-w-20:20[v${i}]`);
       }
       videoLabels.push(`[v${i}]`);
+
+      // Mapeia vídeo e áudio (se existir)
+      mapArgs.push('-map', `${i}:v`);
+      mapArgs.push('-map', `${i}:a?`);
     });
 
-    filter += `${videoLabels.join('')}concat=n=${inputs.length}:v=1:a=0[outv]`;
+    const filter = filterParts.join('; ') + `; ${videoLabels.join('')}concat=n=${inputs.length}:v=1:a=1[outv][outa]`;
 
     const args = [
       '-hide_banner',
       '-loglevel', 'info',
-      '-f', 'lavfi', '-t', '0.1', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
       ...ffmpegArgs,
       '-filter_complex', filter,
       '-map', '[outv]',
-      '-map', '0:a',
+      '-map', '[outa]',
       '-c:v', 'libx264',
       '-preset', 'veryfast',
       '-crf', '23',
       '-c:a', 'aac',
       '-b:a', '128k',
-      '-shortest',
       '-f', 'flv',
       input.stream_url
     ];
@@ -202,12 +221,12 @@ async function transmitirSequencia() {
     const ffmpegProc = spawn('ffmpeg', args, { stdio: 'inherit' });
 
     ffmpegProc.on('exit', code => {
-      console.log(code === 0 ? '✅ Live finalizada.' : `❌ Erro na live. Código: ${code}`);
+      console.log(code === 0 ? '✅ Live finalizada com sucesso.' : `❌ Erro na live. Código: ${code}`);
       limparTemporarios();
     });
 
   } catch (err) {
-    console.error('❌ Erro:', err);
+    console.error('❌ Erro:', err.message || err);
     limparTemporarios();
     process.exit(1);
   }
