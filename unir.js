@@ -65,6 +65,7 @@ async function reencodeVideo(entrada, saida) {
     '-r', '30',
     '-c:a', 'aac',
     '-b:a', '128k',
+    '-ar', '44100',
     '-shortest',
     saida
   ]);
@@ -100,7 +101,10 @@ async function aplicarOverlayParte(parte, logo, rodape, output) {
     '-loop', '1', '-i', rodape,
     '-filter_complex', filtros.join('; '),
     '-c:v', 'libx264',
-    '-c:a', 'copy',
+    '-pix_fmt', 'yuv420p',
+    '-preset', 'veryfast',
+    '-c:a', 'aac',
+    '-b:a', '128k',
     '-t', (await obterDuracao(parte)).toString(),
     output
   ]);
@@ -117,8 +121,13 @@ async function iniciarTransmissao(listaArquivos, streamURL) {
     '-f', 'concat',
     '-safe', '0',
     '-i', playlist,
-    '-c:v', 'copy',
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-profile:v', 'main',
+    '-pix_fmt', 'yuv420p',
     '-c:a', 'aac',
+    '-b:a', '128k',
+    '-ar', '44100',
     '-f', 'flv',
     streamURL
   ]);
@@ -146,29 +155,25 @@ async function iniciarTransmissao(listaArquivos, streamURL) {
       await baixarArquivo(input.videos_extras[i], `extra${i}.mp4`);
     }
 
-    // Cortar principal
     const duracao = await obterDuracao('video_principal.mp4');
     const metade = duracao / 2;
     await cortarVideo('video_principal.mp4', 0, metade, 'parte1_bruta.mp4');
     await cortarVideo('video_principal.mp4', metade, metade, 'parte2_bruta.mp4');
 
-    // Aplicar overlays
     await aplicarOverlayParte('parte1_bruta.mp4', 'logo.png', 'rodape.png', 'parte1.mp4');
     await aplicarOverlayParte('parte2_bruta.mp4', 'logo.png', 'rodape.png', 'parte2.mp4');
 
     console.log('✅ Partes 1 e 2 prontas! Iniciando live...');
 
-    // Montar ordem da live
     const ordemLive = ['parte1.mp4'];
     if (fs.existsSync('video_inicial.mp4')) ordemLive.push('video_inicial.mp4');
     if (fs.existsSync('video_miraplay.mp4')) ordemLive.push('video_miraplay.mp4');
-    const extras = fs.readdirSync('.').filter(f => /^extra\d+\.mp4$/.test(f));
+    const extras = fs.readdirSync('.').filter(f => /^extra\d+\.mp4$/.test(f)).sort();
     ordemLive.push(...extras);
     if (fs.existsSync('video_inicial.mp4')) ordemLive.push('video_inicial.mp4');
     ordemLive.push('parte2.mp4');
     if (fs.existsSync('video_final.mp4')) ordemLive.push('video_final.mp4');
 
-    // Iniciar transmissão ao vivo no Facebook
     await iniciarTransmissao(ordemLive, input.stream_url);
 
     console.log('🎉 Live finalizada com sucesso!');
