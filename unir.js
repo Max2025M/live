@@ -62,6 +62,7 @@ async function reencode(entrada, saida) {
     '-r', '30',
     '-c:a', 'aac',
     '-b:a', '128k',
+    '-shortest',
     saida
   ]);
   registrarTemporario(saida);
@@ -79,6 +80,8 @@ async function cortarVideo(entrada, inicio, fim, saida) {
     '-i', entrada,
     '-c:v', 'libx264',
     '-c:a', 'aac',
+    '-b:a', '128k',
+    '-shortest',
     saida
   ]);
   registrarTemporario(saida);
@@ -93,6 +96,7 @@ async function inserirLogo(videoInput, logo, saida) {
     '-preset', 'veryfast',
     '-crf', '23',
     '-c:a', 'aac',
+    '-shortest',
     saida
   ]);
   registrarTemporario(saida);
@@ -151,6 +155,7 @@ async function transmitirSequencia() {
     ].filter(Boolean);
 
     const ffmpegArgs = [];
+
     inputs.forEach(input => ffmpegArgs.push('-i', input.path));
     ffmpegArgs.push('-i', logo);
     ffmpegArgs.push('-i', rodape);
@@ -160,36 +165,35 @@ async function transmitirSequencia() {
 
     let filter = '';
     let videoLabels = [];
-    let audioLabels = [];
 
     inputs.forEach((input, i) => {
-      if (!input.withRodape) {
-        filter += `[${i}:v]scale=1280:720[v${i}]; `;
-        videoLabels.push(`[v${i}]`);
-      } else {
-        filter += `[${i}:v]scale=1280:720[vs${i}]; `;
+      filter += `[${i}:v]scale=1280:720[vs${i}]; `;
+      if (input.withRodape) {
         filter += `[${rodapeIdx}:v]scale=426:240[rod${i}]; `;
         filter += `[vs${i}][rod${i}]overlay=W-w-50:H-h-10[tmp${i}]; `;
         filter += `[tmp${i}][${logoIdx}:v]overlay=W-w-20:20[v${i}]; `;
-        videoLabels.push(`[v${i}]`);
+      } else {
+        filter += `[vs${i}][${logoIdx}:v]overlay=W-w-20:20[v${i}]; `;
       }
-      audioLabels.push(`[${i}:a?]`);
+      videoLabels.push(`[v${i}]`);
     });
 
-    filter += `${videoLabels.join('')}${audioLabels.join('')}concat=n=${inputs.length}:v=1:a=1[outv][outa]`;
+    filter += `${videoLabels.join('')}concat=n=${inputs.length}:v=1:a=0[outv]`;
 
     const args = [
       '-hide_banner',
       '-loglevel', 'info',
+      '-f', 'lavfi', '-t', '0.1', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
       ...ffmpegArgs,
       '-filter_complex', filter,
       '-map', '[outv]',
-      '-map', '[outa]',
+      '-map', '0:a',
       '-c:v', 'libx264',
       '-preset', 'veryfast',
       '-crf', '23',
       '-c:a', 'aac',
       '-b:a', '128k',
+      '-shortest',
       '-f', 'flv',
       input.stream_url
     ];
